@@ -78,15 +78,6 @@ func (e *Executor) post(status interface{}) {
 		}))
 		return
 	}
-	if e.token == "" {
-		log.Println("[POST] No token cached, logging in...")
-		e.token = e.login()
-		if e.token == "" {
-			log.Println("[POST] No token, aborting post")
-			e.VerboseLog("No token, aborting post")
-			return
-		}
-	}
 
 	var payload map[string]interface{}
 	task := e.cfg.Task
@@ -130,6 +121,17 @@ func (e *Executor) post(status interface{}) {
 	var err error
 	maxRetries := 5
 	for attempt := 1; attempt <= maxRetries; attempt++ {
+		// Re-login if token is missing or was cleared after a 401/403
+		if e.token == "" {
+			log.Printf("[POST] No token (attempt %d/%d), logging in...", attempt, maxRetries)
+			e.token = e.login()
+			if e.token == "" {
+				log.Printf("[POST] Login failed on attempt %d, retrying...", attempt)
+				time.Sleep(1 * time.Second)
+				continue
+			}
+		}
+
 		req, _ := http.NewRequest("POST", url, bytes.NewBuffer(data))
 		req.Header.Set("Authorization", e.token)
 		req.Header.Set("Content-Type", "application/json")
@@ -138,7 +140,14 @@ func (e *Executor) post(status interface{}) {
 		if err == nil && resp.StatusCode >= 200 && resp.StatusCode < 300 {
 			break
 		}
-		log.Printf("[POST] Attempt %d failed: %v", attempt, err)
+
+		// Token rejected by server — clear it so the next attempt triggers a fresh login
+		if err == nil && (resp.StatusCode == 401 || resp.StatusCode == 403) {
+			log.Printf("[POST] Token rejected (HTTP %d), clearing for re-login...", resp.StatusCode)
+			e.token = ""
+		}
+
+		log.Printf("[POST] Attempt %d/%d failed: %v", attempt, maxRetries, err)
 		time.Sleep(1 * time.Second)
 	}
 	if err != nil || resp == nil || resp.StatusCode < 200 || resp.StatusCode >= 300 {
