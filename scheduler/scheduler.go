@@ -144,10 +144,6 @@ func (s *Scheduler) randomizeAllTimes(ctx context.Context, now time.Time) {
 		stopWork.Format("15:04:05"),
 	)
 	log.Println("[PLANNED TIMES]\n" + plannedMsg)
-	// Only send notification if webhook is set
-	if s.notify != nil && s.cfg.WebhookURL != "" {
-		s.notify.Send(ctx, "Planned Times", plannedMsg)
-	}
 }
 
 func (s *Scheduler) fetchCalendar(ctx context.Context, url, cachePath string, useAuth bool) ([]byte, error) {
@@ -381,6 +377,9 @@ func (s *Scheduler) Run(ctx context.Context) {
 		st.WorkStartTime = time.Now()
 		s.state.Save(today, st)
 		log.Printf("[STATE] Updated: work_started=true for %s", today)
+		if s.notify != nil {
+			s.notify.Send(ctx, "▶️ Arbeit gestartet", now.Format("15:04:05"))
+		}
 		return
 	}
 
@@ -391,6 +390,9 @@ func (s *Scheduler) Run(ctx context.Context) {
 		st.BreakStartTime = time.Now()
 		s.state.Save(today, st)
 		log.Printf("[STATE] Updated: break_started=true for %s", today)
+		if s.notify != nil {
+			s.notify.Send(ctx, "⏸️ Pause gestartet", now.Format("15:04:05"))
+		}
 		return
 	}
 
@@ -404,6 +406,9 @@ func (s *Scheduler) Run(ctx context.Context) {
 			st.BreakStopTime = time.Now()
 			s.state.Save(today, st)
 			log.Printf("[STATE] Updated: break_stopped=true for %s", today)
+			if s.notify != nil {
+				s.notify.Send(ctx, "▶️ Pause beendet", now.Format("15:04:05"))
+			}
 		} else if !minBreakMet {
 			s.verboseLog("[INFO] Not stopping break: minimum duration not met.")
 		} else if !afterPlannedStop {
@@ -419,12 +424,26 @@ func (s *Scheduler) Run(ctx context.Context) {
 			st.WorkStopTime = time.Now()
 			s.state.Save(today, st)
 			log.Printf("[STATE] Updated: work_stopped=true for %s", today)
+			if s.notify != nil {
+				net := st.NetWorkDuration()
+				s.notify.Send(ctx, "⏹️ Arbeit beendet",
+					fmt.Sprintf("%s  ·  Nettozeit: %s", now.Format("15:04:05"), formatDuration(net)))
+			}
 			// Do not reset state here; keep the day's state for metrics and to prevent re-triggering
 		} else {
 			s.verboseLog("[INFO] Not stopping work: minimum duration not met.")
 		}
 		return
 	}
+}
+
+func formatDuration(d time.Duration) string {
+	if d <= 0 {
+		return "0h 00m"
+	}
+	h := int(d.Hours())
+	m := int(d.Minutes()) % 60
+	return fmt.Sprintf("%dh %02dm", h, m)
 }
 
 func isWorkDay(workDays string, now time.Time) bool {

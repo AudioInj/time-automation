@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -26,14 +27,23 @@ func (n *Notifier) Send(ctx context.Context, status, message string) {
 	if n.webhook == "" {
 		return
 	}
-	payload := map[string]interface{}{
-		"embeds": []map[string]interface{}{
-			{
-				"title":       status,
-				"description": message,
-				"color":       3066993,
+	var payload interface{}
+	if strings.Contains(n.webhook, "hooks.slack.com") {
+		text := "*" + status + "*"
+		if message != "" {
+			text += "\n" + message
+		}
+		payload = map[string]string{"text": text}
+	} else {
+		payload = map[string]interface{}{
+			"embeds": []map[string]interface{}{
+				{
+					"title":       status,
+					"description": message,
+					"color":       3066993,
+				},
 			},
-		},
+		}
 	}
 	data, err := json.Marshal(payload)
 	if err != nil {
