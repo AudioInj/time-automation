@@ -3,10 +3,11 @@ package scheduler
 
 import (
 	"fmt"
-	"io/ioutil"
+	"io"
 	"log"
 	"math/rand"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -182,16 +183,16 @@ func (s *Scheduler) fetchCalendar(url, cachePath string, useAuth bool) ([]byte, 
 		goto fallback
 	}
 	defer resp.Body.Close()
-	data, err = ioutil.ReadAll(resp.Body)
+	data, err = io.ReadAll(resp.Body)
 	if err == nil {
-		_ = ioutil.WriteFile(cachePath, data, 0644)
+		_ = os.WriteFile(cachePath, data, 0644)
 		log.Printf("[INIT] Successfully fetched and cached calendar: %s", url)
 	}
 	return data, err
 
 fallback:
 	// fallback to cached file
-	data, err2 := ioutil.ReadFile(cachePath)
+	data, err2 := os.ReadFile(cachePath)
 	if err2 == nil {
 		log.Printf("[INIT] Loaded cached calendar for %s", url)
 		return data, nil
@@ -228,9 +229,10 @@ func (s *Scheduler) isTodayHolidayOrVacation(now time.Time) (bool, string, strin
 	return false, "", ""
 }
 
-// Helper: get the SUMMARY for today's event in an ICS file
+// Helper: get the SUMMARY for today's event in an ICS file.
+// Evaluates at END:VEVENT so property order within the block does not matter.
 func getICSTodaySummary(path string, now time.Time) string {
-	data, err := ioutil.ReadFile(path)
+	data, err := os.ReadFile(path)
 	if err != nil {
 		return ""
 	}
@@ -238,28 +240,35 @@ func getICSTodaySummary(path string, now time.Time) string {
 	dateStr := now.Format("20060102")
 	inEvent := false
 	summary := ""
+	hasDate := false
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
 		if line == "BEGIN:VEVENT" {
 			inEvent = true
 			summary = ""
+			hasDate = false
 		}
 		if inEvent && strings.HasPrefix(line, "SUMMARY:") {
 			summary = strings.TrimPrefix(line, "SUMMARY:")
 		}
 		if inEvent && strings.HasPrefix(line, "DTSTART") && strings.Contains(line, dateStr) {
-			return summary
+			hasDate = true
 		}
 		if line == "END:VEVENT" {
+			if inEvent && hasDate {
+				return summary
+			}
 			inEvent = false
 		}
 	}
 	return ""
 }
 
-// Checks if today is in the ICS file, optionally filtering by keyword
+// isICSToday reports whether today is represented by an event in the ICS file,
+// optionally requiring the SUMMARY to contain keyword (case-insensitive).
+// Evaluates at END:VEVENT so property order within the block does not matter.
 func isICSToday(path string, now time.Time, keyword string) bool {
-	data, err := ioutil.ReadFile(path)
+	data, err := os.ReadFile(path)
 	if err != nil {
 		return false
 	}
@@ -267,12 +276,14 @@ func isICSToday(path string, now time.Time, keyword string) bool {
 	dateStr := now.Format("20060102")
 	inEvent := false
 	hasKeyword := keyword == ""
+	hasDate := false
 	keywordLower := strings.ToLower(keyword)
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
 		if line == "BEGIN:VEVENT" {
 			inEvent = true
 			hasKeyword = keyword == ""
+			hasDate = false
 		}
 		if inEvent && strings.HasPrefix(line, "SUMMARY:") && keyword != "" {
 			summary := strings.TrimPrefix(line, "SUMMARY:")
@@ -280,10 +291,13 @@ func isICSToday(path string, now time.Time, keyword string) bool {
 				hasKeyword = true
 			}
 		}
-		if inEvent && strings.HasPrefix(line, "DTSTART") && strings.Contains(line, dateStr) && hasKeyword {
-			return true
+		if inEvent && strings.HasPrefix(line, "DTSTART") && strings.Contains(line, dateStr) {
+			hasDate = true
 		}
 		if line == "END:VEVENT" {
+			if inEvent && hasDate && hasKeyword {
+				return true
+			}
 			inEvent = false
 		}
 	}
