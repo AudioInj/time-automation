@@ -8,8 +8,8 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/run2go/time-automation/config"
-	"github.com/run2go/time-automation/notify"
+	"github.com/audioinj/time-automation/config"
+	"github.com/audioinj/time-automation/notify"
 )
 
 type Executor struct {

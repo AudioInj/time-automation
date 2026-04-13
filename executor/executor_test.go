@@ -3,7 +3,7 @@ package executor
 import (
 	"testing"
 
-	"github.com/run2go/time-automation/config"
+	"github.com/audioinj/time-automation/config"
 )
 
 func TestNew(t *testing.T) {

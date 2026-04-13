@@ -32,9 +32,13 @@ func (n *Notifier) Send(status, message string) {
 	data, _ := json.Marshal(payload)
 	resp, err := http.Post(n.webhook, "application/json", bytes.NewBuffer(data))
 	if err != nil {
-		log.Printf("Failed to send Discord message: %v", err)
+		log.Printf("[NOTIFY] Failed to send Discord message: %v", err)
 		return
 	}
 	defer resp.Body.Close()
-	log.Printf("Sent notification: %s", message)
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		log.Printf("[NOTIFY] Webhook returned %s", resp.Status)
+		return
+	}
+	log.Printf("[NOTIFY] Sent notification: %s", status)
 }

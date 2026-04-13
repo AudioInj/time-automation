@@ -9,8 +9,7 @@ import (
 )
 
 func TestSendEmptyWebhook(t *testing.T) {
-	// Must not panic or make any network call.
-	New("").Send("status", "message")
+	New("").Send("status", "message") // must not panic
 }
 
 func TestSendReachesWebhook(t *testing.T) {
@@ -64,5 +63,15 @@ func TestSendContentType(t *testing.T) {
 	}))
 	defer ts.Close()
 
+	New(ts.URL).Send("title", "body")
+}
+
+func TestSendLogsOnErrorStatus(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	defer ts.Close()
+
+	// Should not panic; error is only logged
 	New(ts.URL).Send("title", "body")
 }

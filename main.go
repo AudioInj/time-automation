@@ -2,20 +2,24 @@
 package main
 
 import (
+	"context"
 	"log"
+	"os/signal"
+	"syscall"
 	"time"
 
-	"github.com/run2go/time-automation/config"
-	"github.com/run2go/time-automation/executor"
-	"github.com/run2go/time-automation/notify"
-	"github.com/run2go/time-automation/scheduler"
-	"github.com/run2go/time-automation/tracker"
+	"github.com/audioinj/time-automation/config"
+	"github.com/audioinj/time-automation/executor"
+	"github.com/audioinj/time-automation/notify"
+	"github.com/audioinj/time-automation/scheduler"
+	"github.com/audioinj/time-automation/tracker"
 )
 
 func main() {
-	cfg := config.Load()
-
-	// Do NOT clear state file at startup; keep for resuming and metrics
+	cfg, err := config.Load()
+	if err != nil {
+		log.Fatalf("[INIT] %v", err)
+	}
 	log.Println("[INIT] Configuration loaded.")
 
 	notifier := notify.New(cfg.WebhookURL)
@@ -23,9 +27,20 @@ func main() {
 	state := tracker.New(cfg.StateFile)
 	sched := scheduler.New(*cfg, state, exec, notifier)
 
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
+	defer stop()
+
 	log.Println("[START] Time automation running...")
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+
 	for {
-		sched.Run()
-		time.Sleep(5 * time.Second)
+		select {
+		case <-ctx.Done():
+			log.Println("[STOP] Shutting down gracefully.")
+			return
+		case <-ticker.C:
+			sched.Run()
+		}
 	}
 }
