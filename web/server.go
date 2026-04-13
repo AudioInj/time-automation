@@ -15,19 +15,29 @@ import (
 	"github.com/audioinj/time-automation/tracker"
 )
 
+// Executor is the minimal interface the web server needs to fire manual actions.
+type Executor interface {
+	StartWork(ctx context.Context)
+	StopWork(ctx context.Context)
+	StartBreak(ctx context.Context)
+	StopBreak(ctx context.Context)
+}
+
 // Server serves the status web UI.
 type Server struct {
 	cfg   config.Config
 	state *tracker.StateTracker
+	exec  Executor
 	srv   *http.Server
 }
 
 // New creates a Server that listens on addr (e.g. ":8077").
-func New(cfg config.Config, state *tracker.StateTracker, addr string) *Server {
-	s := &Server{cfg: cfg, state: state}
+func New(cfg config.Config, state *tracker.StateTracker, exec Executor, addr string) *Server {
+	s := &Server{cfg: cfg, state: state, exec: exec}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", s.handleIndex)
 	mux.HandleFunc("/api/status", s.handleAPIStatus)
+	mux.HandleFunc("/api/action", s.handleAction)
 	mux.HandleFunc("/health", s.handleHealth)
 	s.srv = &http.Server{
 		Addr:         addr,
@@ -99,6 +109,12 @@ type StatusData struct {
 
 	// History (last 7 days, excluding today)
 	History []HistoryEntry `json:"history"`
+
+	// Available manual actions for the current state
+	CanStartWork  bool `json:"can_start_work"`
+	CanStopWork   bool `json:"can_stop_work"`
+	CanStartBreak bool `json:"can_start_break"`
+	CanStopBreak  bool `json:"can_stop_break"`
 
 	Config ConfigSummary `json:"config"`
 }
@@ -221,6 +237,11 @@ func (s *Server) buildStatus() StatusData {
 
 		History: history,
 
+		CanStartWork:  !st.WorkStarted && !st.IsHoliday && !st.IsVacation,
+		CanStopWork:   st.WorkStarted && !st.WorkStopped,
+		CanStartBreak: st.WorkStarted && !st.WorkStopped && !st.BreakStarted,
+		CanStopBreak:  st.BreakStarted && !st.BreakStopped,
+
 		Config: ConfigSummary{
 			Endpoint:         s.cfg.Subdomain + "." + s.cfg.Domain,
 			Username:         s.cfg.Username,
@@ -246,6 +267,65 @@ func (s *Server) buildStatus() StatusData {
 }
 
 // --- handlers ---
+
+func (s *Server) handleAction(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	action := r.FormValue("action")
+	today := time.Now().Format("2006-01-02")
+	st := s.state.Load(today)
+	now := time.Now()
+
+	switch action {
+	case "start_work":
+		if !st.WorkStarted {
+			if s.exec != nil {
+				s.exec.StartWork(r.Context())
+			}
+			st.WorkStarted = true
+			st.WorkStartTime = now
+			s.state.Save(today, st)
+			log.Printf("[WEB] Manual action: start_work at %s", now.Format("15:04:05"))
+		}
+	case "stop_work":
+		if st.WorkStarted && !st.WorkStopped {
+			if s.exec != nil {
+				s.exec.StopWork(r.Context())
+			}
+			st.WorkStopped = true
+			st.WorkStopTime = now
+			s.state.Save(today, st)
+			log.Printf("[WEB] Manual action: stop_work at %s", now.Format("15:04:05"))
+		}
+	case "start_break":
+		if st.WorkStarted && !st.BreakStarted {
+			if s.exec != nil {
+				s.exec.StartBreak(r.Context())
+			}
+			st.BreakStarted = true
+			st.BreakStartTime = now
+			s.state.Save(today, st)
+			log.Printf("[WEB] Manual action: start_break at %s", now.Format("15:04:05"))
+		}
+	case "stop_break":
+		if st.BreakStarted && !st.BreakStopped {
+			if s.exec != nil {
+				s.exec.StopBreak(r.Context())
+			}
+			st.BreakStopped = true
+			st.BreakStopTime = now
+			s.state.Save(today, st)
+			log.Printf("[WEB] Manual action: stop_break at %s", now.Format("15:04:05"))
+		}
+	default:
+		http.Error(w, "unknown action", http.StatusBadRequest)
+		return
+	}
+
+	http.Redirect(w, r, "/", http.StatusSeeOther)
+}
 
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
@@ -362,6 +442,15 @@ main{max-width:920px;margin:24px auto;padding:0 16px;display:grid;grid-template-
 .hist-date{font-family:monospace;font-weight:600}
 .hist-net{font-family:monospace;font-weight:700;color:var(--primary)}
 
+/* Action buttons */
+.actions{display:flex;flex-wrap:wrap;gap:10px;margin-top:4px}
+.btn{display:inline-flex;align-items:center;gap:6px;padding:8px 16px;border:none;border-radius:8px;font-size:.855rem;font-weight:600;cursor:pointer;transition:opacity .15s}
+.btn:active{opacity:.75}
+.btn-green{background:var(--green);color:#fff}
+.btn-amber{background:var(--amber);color:#fff}
+.btn-red{background:var(--red);color:#fff}
+.btn-grey{background:#6b7280;color:#fff}
+
 /* Flags row */
 .flags{display:flex;gap:8px;flex-wrap:wrap;margin-top:4px}
 
@@ -462,6 +551,39 @@ main{max-width:920px;margin:24px auto;padding:0 16px;display:grid;grid-template-
     <div class="bignum-label">Arbeit noch nicht gestartet</div>
   {{end}}
 </div>
+
+<!-- ── Manuelle Aktionen ── -->
+{{if or .CanStartWork .CanStopWork .CanStartBreak .CanStopBreak}}
+<div class="card full">
+  <h2>Manuelle Steuerung</h2>
+  <div class="actions">
+    {{if .CanStartWork}}
+    <form method="post" action="/api/action" onsubmit="return confirm('Arbeit jetzt manuell starten?')">
+      <input type="hidden" name="action" value="start_work">
+      <button class="btn btn-green" type="submit">▶ Arbeit starten</button>
+    </form>
+    {{end}}
+    {{if .CanStartBreak}}
+    <form method="post" action="/api/action" onsubmit="return confirm('Pause jetzt manuell starten?')">
+      <input type="hidden" name="action" value="start_break">
+      <button class="btn btn-amber" type="submit">⏸ Pause starten</button>
+    </form>
+    {{end}}
+    {{if .CanStopBreak}}
+    <form method="post" action="/api/action" onsubmit="return confirm('Pause jetzt manuell beenden?')">
+      <input type="hidden" name="action" value="stop_break">
+      <button class="btn btn-green" type="submit">▶ Pause beenden</button>
+    </form>
+    {{end}}
+    {{if .CanStopWork}}
+    <form method="post" action="/api/action" onsubmit="return confirm('Arbeit jetzt manuell beenden?')">
+      <input type="hidden" name="action" value="stop_work">
+      <button class="btn btn-red" type="submit">⏹ Arbeit beenden</button>
+    </form>
+    {{end}}
+  </div>
+</div>
+{{end}}
 
 <!-- ── Geplante Zeiten / Timeline ── -->
 <div class="card full">
