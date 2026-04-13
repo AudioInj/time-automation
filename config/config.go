@@ -119,6 +119,20 @@ func Load() (*Config, error) {
 		VacationKeyword: os.Getenv("VACATION_KEYWORD"),
 	}
 
+	// Required field validation
+	if cfg.Domain == "" {
+		errs = append(errs, "  DOMAIN: required")
+	}
+	if cfg.Subdomain == "" {
+		errs = append(errs, "  SUBDOMAIN: required")
+	}
+	if cfg.Username == "" {
+		errs = append(errs, "  USERNAME: required")
+	}
+	if cfg.Password == "" {
+		errs = append(errs, "  PASSWORD: required")
+	}
+
 	// Logical constraint validation (only when both values parsed successfully)
 	if parseOK["START_WORK_MIN"] && parseOK["START_WORK_MAX"] && cfg.StartWorkMax.Before(cfg.StartWorkMin) {
 		errs = append(errs, "  START_WORK_MAX must not be before START_WORK_MIN")

@@ -35,7 +35,11 @@ func (n *Notifier) Send(ctx context.Context, status, message string) {
 			},
 		},
 	}
-	data, _ := json.Marshal(payload)
+	data, err := json.Marshal(payload)
+	if err != nil {
+		log.Printf("[NOTIFY] Failed to marshal payload: %v", err)
+		return
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, n.webhook, bytes.NewBuffer(data))
 	if err != nil {
 		log.Printf("[NOTIFY] Failed to create request: %v", err)
@@ -47,7 +51,7 @@ func (n *Notifier) Send(ctx context.Context, status, message string) {
 		log.Printf("[NOTIFY] Failed to send Discord message: %v", err)
 		return
 	}
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		log.Printf("[NOTIFY] Webhook returned %s", resp.Status)
 		return

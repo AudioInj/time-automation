@@ -154,6 +154,44 @@ func TestLoadConstraintWorkTimeViolation(t *testing.T) {
 	}
 }
 
+func TestLoadRequiredFieldsMissing(t *testing.T) {
+	// Set all required env vars to empty; time/duration fields must still be valid
+	t.Setenv("DOMAIN", "")
+	t.Setenv("SUBDOMAIN", "")
+	t.Setenv("USERNAME", "")
+	t.Setenv("PASSWORD", "")
+	t.Setenv("START_WORK_MIN", "08:00")
+	t.Setenv("START_WORK_MAX", "09:00")
+	t.Setenv("START_BREAK_MIN", "12:00")
+	t.Setenv("START_BREAK_MAX", "13:00")
+	t.Setenv("MIN_WORK_DURATION", "8h")
+	t.Setenv("MAX_WORK_DURATION", "9h")
+	t.Setenv("MIN_BREAK_DURATION", "0.5h")
+	t.Setenv("MAX_BREAK_DURATION", "1h")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("expected error for missing required fields")
+	}
+	for _, field := range []string{"DOMAIN", "SUBDOMAIN", "USERNAME", "PASSWORD"} {
+		if !strings.Contains(err.Error(), field) {
+			t.Errorf("error should mention %s, got: %v", field, err)
+		}
+	}
+}
+
+func TestLoadRequiredDomainMissing(t *testing.T) {
+	validEnv(t)
+	t.Setenv("DOMAIN", "")
+	_, err := Load()
+	if err == nil {
+		t.Fatal("expected error for missing DOMAIN")
+	}
+	if !strings.Contains(err.Error(), "DOMAIN") {
+		t.Errorf("error should mention DOMAIN, got: %v", err)
+	}
+}
+
 func TestLoadConstraintWorkDurationViolation(t *testing.T) {
 	validEnv(t)
 	t.Setenv("MIN_WORK_DURATION", "9h")

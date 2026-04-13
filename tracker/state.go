@@ -14,9 +14,11 @@ type DayState struct {
 	WorkStarted    bool      `json:"work_started"`
 	WorkStartTime  time.Time `json:"work_start_time"`
 	WorkStopped    bool      `json:"work_stopped"`
+	WorkStopTime   time.Time `json:"work_stop_time,omitempty"`
 	BreakStarted   bool      `json:"break_started"`
 	BreakStartTime time.Time `json:"break_start_time"`
 	BreakStopped   bool      `json:"break_stopped"`
+	BreakStopTime  time.Time `json:"break_stop_time,omitempty"`
 	// Planned times for this day
 	PlannedStartWork  time.Time `json:"planned_start_work,omitempty"`
 	PlannedStartBreak time.Time `json:"planned_start_break,omitempty"`
@@ -28,33 +30,59 @@ type DayState struct {
 	IsVacation bool `json:"is_vacation,omitempty"`
 }
 
-// NetWorkDuration returns the net working time for the day (work duration minus break).
+// NetWorkDuration returns the net working time for the day (time before break + time after break).
 // For in-progress periods, the current time is used as the end.
-// Uses PlannedStopWork / PlannedStopBreak as end times when the day is completed.
+// Actual stop times (WorkStopTime, BreakStopTime) take precedence; PlannedStop* are used as fallback
+// for backwards compatibility with state files that predate the actual-stop-time fields.
 func (ds DayState) NetWorkDuration() time.Duration {
 	if !ds.WorkStarted {
 		return 0
 	}
 	now := time.Now()
 
+	// Determine effective work end
 	workEnd := now
-	if ds.WorkStopped && !ds.PlannedStopWork.IsZero() {
+	if !ds.WorkStopTime.IsZero() {
+		workEnd = ds.WorkStopTime
+	} else if ds.WorkStopped && !ds.PlannedStopWork.IsZero() {
 		workEnd = ds.PlannedStopWork
 	}
-	work := workEnd.Sub(ds.WorkStartTime)
 
-	var brk time.Duration
-	if ds.BreakStarted {
-		breakEnd := now
-		if ds.BreakStopped && !ds.PlannedStopBreak.IsZero() {
-			breakEnd = ds.PlannedStopBreak
+	if !ds.BreakStarted {
+		// No break at all — full span from work start to work end
+		d := workEnd.Sub(ds.WorkStartTime)
+		if d < 0 {
+			return 0
 		}
-		brk = breakEnd.Sub(ds.BreakStartTime)
+		return d
 	}
-	if brk > work {
-		brk = work
+
+	// Part 1: work before break
+	part1 := ds.BreakStartTime.Sub(ds.WorkStartTime)
+	if part1 < 0 {
+		part1 = 0
 	}
-	return work - brk
+
+	if !ds.BreakStopped {
+		// Break still in progress — only count work done before break
+		return part1
+	}
+
+	// Determine effective break end
+	breakEnd := now
+	if !ds.BreakStopTime.IsZero() {
+		breakEnd = ds.BreakStopTime
+	} else if !ds.PlannedStopBreak.IsZero() {
+		breakEnd = ds.PlannedStopBreak
+	}
+
+	// Part 2: work after break
+	part2 := workEnd.Sub(breakEnd)
+	if part2 < 0 {
+		part2 = 0
+	}
+
+	return part1 + part2
 }
 
 type StateTracker struct {
@@ -95,12 +123,23 @@ func (s *StateTracker) Save(date string, state DayState) {
 	s.saveFile()
 }
 
+// LoadAll returns a snapshot of all persisted day states (safe for concurrent use).
+func (s *StateTracker) LoadAll() map[string]DayState {
+	s.lock.Lock()
+	defer s.lock.Unlock()
+	result := make(map[string]DayState, len(s.data))
+	for k, v := range s.data {
+		result[k] = v
+	}
+	return result
+}
+
 func (s *StateTracker) loadFile() {
 	file, err := os.Open(s.path)
 	if err != nil {
 		return
 	}
-	defer file.Close()
+	defer file.Close() //nolint:errcheck
 	content, _ := io.ReadAll(file)
 	if err := json.Unmarshal(content, &s.data); err != nil {
 		log.Printf("[STATE] Failed to parse state file: %v", err)
@@ -108,12 +147,12 @@ func (s *StateTracker) loadFile() {
 }
 
 func (s *StateTracker) saveFile() {
-	file, err := os.Create(s.path)
+	file, err := os.OpenFile(s.path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
 	if err != nil {
 		log.Printf("[STATE] Failed to open state file for writing: %v", err)
 		return
 	}
-	defer file.Close()
+	defer file.Close() //nolint:errcheck
 	enc := json.NewEncoder(file)
 	enc.SetIndent("", "  ")
 	if err := enc.Encode(s.data); err != nil {

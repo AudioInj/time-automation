@@ -1,13 +1,14 @@
+version: "2"
+
 linters:
   enable:
     - bodyclose    # HTTP response bodies must be closed
     - errcheck     # unhandled errors
-    - gosimple     # simplifiable code
     - govet        # suspicious constructs
     - ineffassign  # assignments to variables never used afterwards
     - misspell     # common spelling mistakes in comments/strings
     - noctx        # http calls without context
-    - staticcheck  # broad static analysis
+    - staticcheck  # broad static analysis (includes gosimple rules)
     - unused       # unused code
     - whitespace   # unnecessary whitespace
 
@@ -15,13 +16,9 @@ linters-settings:
   errcheck:
     # Don't flag explicit blank-id assignments (_, err) or (x, _)
     check-blank: false
-
-issues:
-  # Show all issues, not just the first few per linter
-  max-same-issues: 0
-  max-issues-per-linter: 0
-  exclude-rules:
-    # The web package contains intentional German strings in HTML templates and tests.
-    # misspell only knows English and would flag valid German words.
-    - path: ^web/
-      linters: [misspell]
+  misspell:
+    # The web package uses intentional German strings in HTML templates and tests.
+    # "Konfiguration" is flagged as a misspelling of "Configuration" by misspell,
+    # but it is the correct German translation.
+    ignore-words:
+      - Konfiguration

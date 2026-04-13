@@ -13,8 +13,10 @@ func tempStateFile(t *testing.T) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	f.Close()
-	t.Cleanup(func() { os.Remove(f.Name()) })
+	if err := f.Close(); err != nil {
+		t.Fatalf("failed to close temp file: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Remove(f.Name()) })
 	return f.Name()
 }
 
@@ -110,7 +112,7 @@ func TestReset(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestNetWorkDurationFullDay(t *testing.T) {
-	// 8:00 – 17:00 work, 12:00 – 12:45 break → net = 8h15m
+	// 8:00 – 17:00 work, 12:00 – 12:45 break → net = 8h15m (via PlannedStop* fallback)
 	ds := DayState{
 		WorkStarted:      true,
 		WorkStartTime:    time.Date(2024, 1, 8, 8, 0, 0, 0, time.UTC),
@@ -122,6 +124,28 @@ func TestNetWorkDurationFullDay(t *testing.T) {
 		PlannedStopBreak: time.Date(2024, 1, 8, 12, 45, 0, 0, time.UTC),
 	}
 	got := ds.NetWorkDuration()
+	want := 8*time.Hour + 15*time.Minute
+	if got != want {
+		t.Errorf("NetWorkDuration() = %v, want %v", got, want)
+	}
+}
+
+func TestNetWorkDurationWithActualStopTimes(t *testing.T) {
+	// 8:00 – 17:05 work, 12:00 – 12:50 break → net = 8h15m (via actual stop times)
+	ds := DayState{
+		WorkStarted:      true,
+		WorkStartTime:    time.Date(2024, 1, 8, 8, 0, 0, 0, time.UTC),
+		WorkStopped:      true,
+		WorkStopTime:     time.Date(2024, 1, 8, 17, 5, 0, 0, time.UTC),
+		PlannedStopWork:  time.Date(2024, 1, 8, 17, 0, 0, 0, time.UTC), // should be ignored
+		BreakStarted:     true,
+		BreakStartTime:   time.Date(2024, 1, 8, 12, 0, 0, 0, time.UTC),
+		BreakStopped:     true,
+		BreakStopTime:    time.Date(2024, 1, 8, 12, 50, 0, 0, time.UTC),
+		PlannedStopBreak: time.Date(2024, 1, 8, 12, 45, 0, 0, time.UTC), // should be ignored
+	}
+	got := ds.NetWorkDuration()
+	// part1 = 12:00 - 8:00 = 4h; part2 = 17:05 - 12:50 = 4h15m; net = 8h15m
 	want := 8*time.Hour + 15*time.Minute
 	if got != want {
 		t.Errorf("NetWorkDuration() = %v, want %v", got, want)
@@ -147,6 +171,50 @@ func TestNetWorkDurationNoBreak(t *testing.T) {
 	want := 8*time.Hour + 30*time.Minute
 	if got != want {
 		t.Errorf("NetWorkDuration() = %v, want %v", got, want)
+	}
+}
+
+func TestNetWorkDurationBreakInProgress(t *testing.T) {
+	// Work started, break started but not yet stopped → only count part before break
+	ds := DayState{
+		WorkStarted:    true,
+		WorkStartTime:  time.Date(2024, 1, 8, 8, 0, 0, 0, time.UTC),
+		BreakStarted:   true,
+		BreakStartTime: time.Date(2024, 1, 8, 12, 0, 0, 0, time.UTC),
+	}
+	got := ds.NetWorkDuration()
+	want := 4 * time.Hour
+	if got != want {
+		t.Errorf("NetWorkDuration() = %v, want %v", got, want)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// LoadAll
+// ---------------------------------------------------------------------------
+
+func TestLoadAll(t *testing.T) {
+	path := tempStateFile(t)
+	tr := New(path)
+
+	tr.Save("2024-01-08", DayState{WorkStarted: true})
+	tr.Save("2024-01-09", DayState{IsHoliday: true})
+
+	all := tr.LoadAll()
+	if len(all) != 2 {
+		t.Fatalf("LoadAll returned %d entries, want 2", len(all))
+	}
+	if !all["2024-01-08"].WorkStarted {
+		t.Error("2024-01-08 WorkStarted should be true")
+	}
+	if !all["2024-01-09"].IsHoliday {
+		t.Error("2024-01-09 IsHoliday should be true")
+	}
+
+	// Modifying the returned map must not affect internal state
+	delete(all, "2024-01-08")
+	if _, ok := tr.LoadAll()["2024-01-08"]; !ok {
+		t.Error("deleting from LoadAll result must not affect internal state")
 	}
 }
 

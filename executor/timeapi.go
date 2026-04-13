@@ -42,7 +42,11 @@ func (e *Executor) login(ctx context.Context) string {
 		"username": e.cfg.Username,
 		"password": e.cfg.Password,
 	}
-	data, _ := json.Marshal(payload)
+	data, err := json.Marshal(payload)
+	if err != nil {
+		log.Printf("[LOGIN] Failed to marshal payload: %v", err)
+		return ""
+	}
 	url := fmt.Sprintf("https://%s.%s/api/login", e.cfg.Subdomain, e.cfg.Domain)
 	log.Println("[LOGIN] Attempting login at:", url)
 	e.VerboseLog("POST " + url)
@@ -61,7 +65,7 @@ func (e *Executor) login(ctx context.Context) string {
 		e.notifier.Send(ctx, "Login Failed", msg)
 		return ""
 	}
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck
 
 	var rawResp map[string]interface{}
 	if err := json.NewDecoder(resp.Body).Decode(&rawResp); err != nil {
@@ -128,13 +132,16 @@ func (e *Executor) post(ctx context.Context, status interface{}) {
 		}
 	}
 
-	data, _ := json.Marshal(payload)
+	data, err := json.Marshal(payload)
+	if err != nil {
+		log.Printf("[POST] Failed to marshal payload: %v", err)
+		return
+	}
 	url := fmt.Sprintf("https://%s.%s/api/post-time", e.cfg.Subdomain, e.cfg.Domain)
 	log.Println("[POST] POST", url, "payload:", string(data))
 	e.VerboseLog("POST " + url + " payload: " + string(data))
 
 	var resp *http.Response
-	var err error
 	maxRetries := 5
 	for attempt := 1; attempt <= maxRetries; attempt++ {
 		// Re-login if token is missing or was cleared after a 401
@@ -162,7 +169,7 @@ func (e *Executor) post(ctx context.Context, status interface{}) {
 		}
 		if resp.StatusCode == 401 {
 			log.Printf("[POST] Attempt %d: token expired (401), re-authenticating...", attempt)
-			resp.Body.Close()
+			_ = resp.Body.Close()
 			e.token = ""
 			e.token = e.login(ctx)
 			if e.token == "" {
@@ -171,7 +178,7 @@ func (e *Executor) post(ctx context.Context, status interface{}) {
 			}
 		} else {
 			log.Printf("[POST] Attempt %d failed: status %s", attempt, resp.Status)
-			resp.Body.Close()
+			_ = resp.Body.Close()
 		}
 		time.Sleep(e.retrySleep)
 	}
@@ -188,7 +195,7 @@ func (e *Executor) post(ctx context.Context, status interface{}) {
 		e.notifier.Send(ctx, "Post Failed @here", msg)
 		return
 	}
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck
 	log.Printf("[POST] Posted status: %v", status)
 	e.VerboseLog("Posted status: " + toString(status))
 }

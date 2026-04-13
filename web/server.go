@@ -8,6 +8,7 @@ import (
 	"html/template"
 	"log"
 	"net/http"
+	"sort"
 	"time"
 
 	"github.com/audioinj/time-automation/config"
@@ -27,6 +28,7 @@ func New(cfg config.Config, state *tracker.StateTracker, addr string) *Server {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", s.handleIndex)
 	mux.HandleFunc("/api/status", s.handleAPIStatus)
+	mux.HandleFunc("/health", s.handleHealth)
 	s.srv = &http.Server{
 		Addr:         addr,
 		Handler:      mux,
@@ -55,6 +57,15 @@ func (s *Server) Start(ctx context.Context) {
 
 // --- data model ---
 
+// HistoryEntry holds a summary of a single past day for the history table.
+type HistoryEntry struct {
+	Date      string `json:"date"`
+	NetWork   string `json:"net_work"`
+	Status    string `json:"status"`
+	WorkStart string `json:"work_start"`
+	WorkEnd   string `json:"work_end"`
+}
+
 // StatusData is passed to both the JSON API and the HTML template.
 type StatusData struct {
 	Date string    `json:"date"`
@@ -67,22 +78,27 @@ type StatusData struct {
 	DayOff       bool `json:"day_off"`
 
 	// State fields
-	WorkStarted   bool   `json:"work_started"`
-	WorkStopped   bool   `json:"work_stopped"`
-	BreakStarted  bool   `json:"break_started"`
-	BreakStopped  bool   `json:"break_stopped"`
-	IsHoliday     bool   `json:"is_holiday"`
-	IsVacation    bool   `json:"is_vacation"`
-	DayNote       string `json:"day_note"`
-	WorkStartTime string `json:"work_start_time"`
+	WorkStarted    bool   `json:"work_started"`
+	WorkStopped    bool   `json:"work_stopped"`
+	BreakStarted   bool   `json:"break_started"`
+	BreakStopped   bool   `json:"break_stopped"`
+	IsHoliday      bool   `json:"is_holiday"`
+	IsVacation     bool   `json:"is_vacation"`
+	DayNote        string `json:"day_note"`
+	WorkStartTime  string `json:"work_start_time"`
+	WorkStopTime   string `json:"work_stop_time"`
 	BreakStartTime string `json:"break_start_time"`
-	NetWork       string `json:"net_work"`
+	BreakStopTime  string `json:"break_stop_time"`
+	NetWork        string `json:"net_work"`
 
 	// Planned times (formatted)
 	PlannedStartWork  string `json:"planned_start_work"`
 	PlannedStartBreak string `json:"planned_start_break"`
 	PlannedStopBreak  string `json:"planned_stop_break"`
 	PlannedStopWork   string `json:"planned_stop_work"`
+
+	// History (last 7 days, excluding today)
+	History []HistoryEntry `json:"history"`
 
 	Config ConfigSummary `json:"config"`
 }
@@ -126,10 +142,55 @@ func fmtDur(d time.Duration) string {
 	return fmt.Sprintf("%dh %02dm", h, m)
 }
 
+func buildHistory(all map[string]tracker.DayState, today string) []HistoryEntry {
+	// Collect dates from the last 7 days (excluding today), sorted descending
+	var dates []string
+	for k := range all {
+		if k != today {
+			dates = append(dates, k)
+		}
+	}
+	sort.Sort(sort.Reverse(sort.StringSlice(dates)))
+	if len(dates) > 7 {
+		dates = dates[:7]
+	}
+
+	entries := make([]HistoryEntry, 0, len(dates))
+	for _, d := range dates {
+		st := all[d]
+		status := "—"
+		switch {
+		case st.IsHoliday:
+			status = "Feiertag"
+		case st.IsVacation:
+			status = "Urlaub"
+		case st.WorkStarted && st.WorkStopped && st.BreakStarted && st.BreakStopped:
+			status = "Abgeschlossen"
+		case st.WorkStarted:
+			status = "Teilweise"
+		}
+
+		workEnd := st.WorkStopTime
+		if workEnd.IsZero() && st.WorkStopped {
+			workEnd = st.PlannedStopWork
+		}
+
+		entries = append(entries, HistoryEntry{
+			Date:      d,
+			NetWork:   fmtDur(st.NetWorkDuration()),
+			Status:    status,
+			WorkStart: fmtT(st.WorkStartTime),
+			WorkEnd:   fmtT(workEnd),
+		})
+	}
+	return entries
+}
+
 func (s *Server) buildStatus() StatusData {
 	now := time.Now()
 	today := now.Format("2006-01-02")
 	st := s.state.Load(today)
+	history := buildHistory(s.state.LoadAll(), today)
 
 	return StatusData{
 		Date: today,
@@ -140,21 +201,25 @@ func (s *Server) buildStatus() StatusData {
 		WorkComplete: st.WorkStarted && st.WorkStopped && st.BreakStarted && st.BreakStopped,
 		DayOff:       st.IsHoliday || st.IsVacation,
 
-		WorkStarted:   st.WorkStarted,
-		WorkStopped:   st.WorkStopped,
-		BreakStarted:  st.BreakStarted,
-		BreakStopped:  st.BreakStopped,
-		IsHoliday:     st.IsHoliday,
-		IsVacation:    st.IsVacation,
-		DayNote:       st.DayNote,
-		WorkStartTime: fmtT(st.WorkStartTime),
+		WorkStarted:    st.WorkStarted,
+		WorkStopped:    st.WorkStopped,
+		BreakStarted:   st.BreakStarted,
+		BreakStopped:   st.BreakStopped,
+		IsHoliday:      st.IsHoliday,
+		IsVacation:     st.IsVacation,
+		DayNote:        st.DayNote,
+		WorkStartTime:  fmtT(st.WorkStartTime),
+		WorkStopTime:   fmtT(st.WorkStopTime),
 		BreakStartTime: fmtT(st.BreakStartTime),
-		NetWork:       fmtDur(st.NetWorkDuration()),
+		BreakStopTime:  fmtT(st.BreakStopTime),
+		NetWork:        fmtDur(st.NetWorkDuration()),
 
 		PlannedStartWork:  fmtT(st.PlannedStartWork),
 		PlannedStartBreak: fmtT(st.PlannedStartBreak),
 		PlannedStopBreak:  fmtT(st.PlannedStopBreak),
 		PlannedStopWork:   fmtT(st.PlannedStopWork),
+
+		History: history,
 
 		Config: ConfigSummary{
 			Endpoint:         s.cfg.Subdomain + "." + s.cfg.Domain,
@@ -181,6 +246,13 @@ func (s *Server) buildStatus() StatusData {
 }
 
 // --- handlers ---
+
+func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	if _, err := w.Write([]byte(`{"status":"ok"}`)); err != nil {
+		log.Printf("[WEB] Health write error: %v", err)
+	}
+}
 
 func (s *Server) handleAPIStatus(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
@@ -280,6 +352,15 @@ main{max-width:920px;margin:24px auto;padding:0 16px;display:grid;grid-template-
 .cfg-row:last-child{border-bottom:none}
 .cfg-row .k{color:var(--muted);font-size:.8rem}
 .cfg-row .v{font-weight:500;font-family:monospace;font-size:.82rem;text-align:right;max-width:60%}
+
+/* History table */
+.hist-table{width:100%;border-collapse:collapse;font-size:.855rem}
+.hist-table th{text-align:left;font-size:.72rem;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--muted);padding:0 12px 8px 0;border-bottom:2px solid var(--border)}
+.hist-table td{padding:8px 12px 8px 0;border-bottom:1px solid var(--border);vertical-align:middle}
+.hist-table tr:last-child td{border-bottom:none}
+.hist-table td:last-child,.hist-table th:last-child{padding-right:0}
+.hist-date{font-family:monospace;font-weight:600}
+.hist-net{font-family:monospace;font-weight:700;color:var(--primary)}
 
 /* Flags row */
 .flags{display:flex;gap:8px;flex-wrap:wrap;margin-top:4px}
@@ -449,6 +530,12 @@ main{max-width:920px;margin:24px auto;padding:0 16px;display:grid;grid-template-
             <span class="tlabel">Geplant</span>
             <span class="tval">{{.PlannedStopBreak}}</span>
           </div>
+          {{if .BreakStopped}}
+          <div class="tl-time-item">
+            <span class="tlabel">Tatsächlich</span>
+            <span class="tval">{{.BreakStopTime}}</span>
+          </div>
+          {{end}}
         </div>
         {{if .BreakActive}}<div class="tl-status"><span class="badge badge-amber" style="padding:2px 8px;font-size:.72rem"><span class="dot"></span>Pause läuft</span></div>{{end}}
         {{if .BreakStopped}}<div class="tl-status"><span class="badge badge-green" style="padding:2px 8px;font-size:.72rem"><span class="dot"></span>erledigt</span></div>{{end}}
@@ -468,6 +555,12 @@ main{max-width:920px;margin:24px auto;padding:0 16px;display:grid;grid-template-
             <span class="tlabel">Geplant</span>
             <span class="tval">{{.PlannedStopWork}}</span>
           </div>
+          {{if .WorkStopped}}
+          <div class="tl-time-item">
+            <span class="tlabel">Tatsächlich</span>
+            <span class="tval">{{.WorkStopTime}}</span>
+          </div>
+          {{end}}
         </div>
         {{if .WorkStopped}}<div class="tl-status"><span class="badge badge-green" style="padding:2px 8px;font-size:.72rem"><span class="dot"></span>erledigt</span></div>{{end}}
       </div>
@@ -479,9 +572,38 @@ main{max-width:920px;margin:24px auto;padding:0 16px;display:grid;grid-template-
   {{end}}
 </div>
 
-<!-- ── Konfiguration ── -->
+<!-- ── Verlauf (letzte 7 Tage) ── -->
+{{if .History}}
 <div class="card full">
-  <h2>Konfiguration</h2>
+  <h2>Verlauf</h2>
+  <table class="hist-table">
+    <thead>
+      <tr>
+        <th>Datum</th>
+        <th>Arbeitsbeginn</th>
+        <th>Arbeitsende</th>
+        <th>Nettozeit</th>
+        <th>Status</th>
+      </tr>
+    </thead>
+    <tbody>
+      {{range .History}}
+      <tr>
+        <td class="hist-date">{{.Date}}</td>
+        <td>{{.WorkStart}}</td>
+        <td>{{.WorkEnd}}</td>
+        <td class="hist-net">{{.NetWork}}</td>
+        <td>{{.Status}}</td>
+      </tr>
+      {{end}}
+    </tbody>
+  </table>
+</div>
+{{end}}
+
+<!-- ── Einstellungen ── -->
+<div class="card full">
+  <h2>Einstellungen</h2>
   <div class="cfg-grid">
     <div>
       <div class="cfg-row"><span class="k">Endpunkt</span><span class="v">{{.Config.Endpoint}}</span></div>

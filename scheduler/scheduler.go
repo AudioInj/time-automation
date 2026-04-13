@@ -183,7 +183,7 @@ func (s *Scheduler) fetchCalendarRemote(ctx context.Context, url, cachePath stri
 		log.Printf("[INIT] Failed to fetch calendar from %s: %v", url, err)
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck
 	if resp.StatusCode != http.StatusOK {
 		log.Printf("[INIT] Calendar fetch returned %s for %s", resp.Status, url)
 		return nil, fmt.Errorf("HTTP %s", resp.Status)
@@ -192,7 +192,9 @@ func (s *Scheduler) fetchCalendarRemote(ctx context.Context, url, cachePath stri
 	if err != nil {
 		return nil, err
 	}
-	_ = os.WriteFile(cachePath, data, 0644)
+	if err := os.WriteFile(cachePath, data, 0644); err != nil {
+		log.Printf("[INIT] Failed to cache calendar to %s: %v", cachePath, err)
+	}
 	log.Printf("[INIT] Successfully fetched and cached calendar: %s", url)
 	return data, nil
 }
@@ -318,11 +320,12 @@ func (s *Scheduler) Run(ctx context.Context) {
 		st := s.state.Load(today)
 
 		// Only check and notify if not already marked as holiday/vacation in state and not already checked in memory
-		if !(st.IsHoliday || st.IsVacation) && s.holidayCheckedDay != now.YearDay() {
+		if !st.IsHoliday && !st.IsVacation && s.holidayCheckedDay != now.YearDay() {
 			if isHoliday, reason, holidayName := s.isTodayHolidayOrVacation(ctx, now); isHoliday {
 				var msg string
 				checkedType := ""
-				if reason == "Public holiday" {
+				switch reason {
+				case "Public holiday":
 					if holidayName != "" {
 						msg = fmt.Sprintf("%s\n%s", holidayName, now.Format("2006-01-02"))
 					} else {
@@ -330,11 +333,11 @@ func (s *Scheduler) Run(ctx context.Context) {
 					}
 					st.IsHoliday = true
 					checkedType = "holiday"
-				} else if reason == "Vacation" {
+				case "Vacation":
 					msg = fmt.Sprintf("Vacation\n%s", now.Format("2006-01-02"))
 					st.IsVacation = true
 					checkedType = "vacation"
-				} else {
+				default:
 					msg = fmt.Sprintf("No work today: %s (%s)", reason, now.Format("2006-01-02"))
 					checkedType = "other"
 				}
@@ -398,6 +401,7 @@ func (s *Scheduler) Run(ctx context.Context) {
 		if minBreakMet && afterPlannedStop {
 			s.executor.StopBreak(ctx)
 			st.BreakStopped = true
+			st.BreakStopTime = time.Now()
 			s.state.Save(today, st)
 			log.Printf("[STATE] Updated: break_stopped=true for %s", today)
 		} else if !minBreakMet {
@@ -412,6 +416,7 @@ func (s *Scheduler) Run(ctx context.Context) {
 		if time.Since(st.WorkStartTime) >= s.cfg.MinWorkDuration {
 			s.executor.StopWork(ctx)
 			st.WorkStopped = true
+			st.WorkStopTime = time.Now()
 			s.state.Save(today, st)
 			log.Printf("[STATE] Updated: work_stopped=true for %s", today)
 			// Do not reset state here; keep the day's state for metrics and to prevent re-triggering
