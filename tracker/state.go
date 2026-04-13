@@ -3,7 +3,7 @@ package tracker
 
 import (
 	"encoding/json"
-	"io/ioutil"
+	"io"
 	"log"
 	"os"
 	"sync"
@@ -24,78 +24,43 @@ type DayState struct {
 	PlannedStopWork   time.Time `json:"planned_stop_work,omitempty"`
 	DayNote           string    `json:"day_note,omitempty"`
 	// Additional flags
-	IsHoliday  bool
-	IsVacation bool
+	IsHoliday  bool `json:"is_holiday,omitempty"`
+	IsVacation bool `json:"is_vacation,omitempty"`
 }
 
-// Returns the total duration (work + break) for this day.
-// If work or break is not stopped, uses current time as end.
-func (ds *DayState) TotalDuration() time.Duration {
-	now := time.Now()
-	var workEnd, breakEnd time.Time
-
-	if ds.WorkStarted {
-		if ds.WorkStopped {
-			workEnd = ds.WorkStartTime.Add(ds.workDuration())
-		} else {
-			workEnd = now
-		}
-	} else {
+// NetWorkDuration returns the net working time for the day (work duration minus break).
+// For in-progress periods, the current time is used as the end.
+// Uses PlannedStopWork / PlannedStopBreak as end times when the day is completed.
+func (ds DayState) NetWorkDuration() time.Duration {
+	if !ds.WorkStarted {
 		return 0
 	}
+	now := time.Now()
 
-	workDuration := workEnd.Sub(ds.WorkStartTime)
+	workEnd := now
+	if ds.WorkStopped && !ds.PlannedStopWork.IsZero() {
+		workEnd = ds.PlannedStopWork
+	}
+	work := workEnd.Sub(ds.WorkStartTime)
 
-	breakDuration := time.Duration(0)
+	var brk time.Duration
 	if ds.BreakStarted {
-		if ds.BreakStopped {
-			breakEnd = ds.BreakStartTime.Add(ds.breakDuration())
-		} else {
-			breakEnd = now
+		breakEnd := now
+		if ds.BreakStopped && !ds.PlannedStopBreak.IsZero() {
+			breakEnd = ds.PlannedStopBreak
 		}
-		breakDuration = breakEnd.Sub(ds.BreakStartTime)
+		brk = breakEnd.Sub(ds.BreakStartTime)
 	}
-
-	return workDuration + breakDuration
-}
-
-// Helper: duration between WorkStartTime and now or when stopped
-func (ds *DayState) workDuration() time.Duration {
-	if ds.WorkStarted {
-		if ds.WorkStopped {
-			return ds.WorkStartTime.Sub(ds.WorkStartTime)
-		}
-		return time.Since(ds.WorkStartTime)
+	if brk > work {
+		brk = work
 	}
-	return 0
-}
-
-// Helper: duration between BreakStartTime and now or when stopped
-func (ds *DayState) breakDuration() time.Duration {
-	if ds.BreakStarted {
-		if ds.BreakStopped {
-			return ds.BreakStartTime.Sub(ds.BreakStartTime)
-		}
-		return time.Since(ds.BreakStartTime)
-	}
-	return 0
+	return work - brk
 }
 
 type StateTracker struct {
-	path         string
-	lock         sync.Mutex
-	data         map[string]DayState
-	LastResetDay int
-}
-
-type State struct {
-	WorkStarted    bool
-	BreakStarted   bool
-	BreakStopped   bool
-	WorkStopped    bool
-	WorkStartTime  time.Time
-	BreakStartTime time.Time
-	LastResetDay   int
+	path string
+	lock sync.Mutex
+	data map[string]DayState
 }
 
 func New(path string) *StateTracker {
@@ -136,7 +101,7 @@ func (s *StateTracker) loadFile() {
 		return
 	}
 	defer file.Close()
-	content, _ := ioutil.ReadAll(file)
+	content, _ := io.ReadAll(file)
 	json.Unmarshal(content, &s.data)
 }
 
@@ -155,12 +120,4 @@ func (s *StateTracker) saveFile() {
 	if err := file.Sync(); err != nil {
 		log.Printf("[STATE] Failed to sync state file: %v", err)
 	}
-}
-
-func (s *State) Save() error {
-	data, err := json.MarshalIndent(s, "", "  ")
-	if err != nil {
-		return err
-	}
-	return os.WriteFile("state.json", data, 0644)
 }
