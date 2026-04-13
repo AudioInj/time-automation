@@ -13,6 +13,7 @@ import (
 	"github.com/audioinj/time-automation/notify"
 	"github.com/audioinj/time-automation/scheduler"
 	"github.com/audioinj/time-automation/tracker"
+	"github.com/audioinj/time-automation/web"
 )
 
 func main() {
@@ -29,6 +30,9 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
+
+	webSrv := web.New(*cfg, state, cfg.WebPort)
+	go webSrv.Start(ctx)
 
 	log.Println("[START] Time automation running...")
 	ticker := time.NewTicker(5 * time.Second)
