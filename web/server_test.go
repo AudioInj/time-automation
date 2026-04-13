@@ -102,6 +102,23 @@ func TestAPIStatusNoPasswordInResponse(t *testing.T) {
 	}
 }
 
+func TestHealthEndpoint(t *testing.T) {
+	s := makeServer(t)
+	req := httptest.NewRequest(http.MethodGet, "/health", nil)
+	w := httptest.NewRecorder()
+	s.handleHealth(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("expected 200, got %d", w.Code)
+	}
+	if ct := w.Header().Get("Content-Type"); !strings.Contains(ct, "application/json") {
+		t.Errorf("expected application/json Content-Type, got %q", ct)
+	}
+	if body := w.Body.String(); body != `{"status":"ok"}` {
+		t.Errorf("expected {\"status\":\"ok\"}, got %q", body)
+	}
+}
+
 func TestIndexRendersStatusBadges(t *testing.T) {
 	s := makeServer(t)
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
@@ -110,7 +127,7 @@ func TestIndexRendersStatusBadges(t *testing.T) {
 
 	body := w.Body.String()
 	// The page must always contain these structural elements
-	for _, want := range []string{"Tagesstatus", "Nettoarbeitszeit", "Tagesplan", "Konfiguration"} {
+	for _, want := range []string{"Tagesstatus", "Nettoarbeitszeit", "Tagesplan", "Einstellungen"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("expected HTML to contain %q", want)
 		}

@@ -114,8 +114,10 @@ func writeTempICS(t *testing.T, content string) string {
 		t.Fatal(err)
 	}
 	_, _ = f.WriteString(content)
-	f.Close()
-	t.Cleanup(func() { os.Remove(f.Name()) })
+	if err := f.Close(); err != nil {
+		t.Fatalf("failed to close temp ICS file: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Remove(f.Name()) })
 	return f.Name()
 }
 
@@ -292,7 +294,7 @@ func TestRunFullCycleThenNoOp(t *testing.T) {
 	}
 
 	st := state.Load(today)
-	if !(st.WorkStarted && st.WorkStopped && st.BreakStarted && st.BreakStopped) {
+	if !st.WorkStarted || !st.WorkStopped || !st.BreakStarted || !st.BreakStopped {
 		t.Fatalf("expected full cycle after 4 Runs; state=%+v", st)
 	}
 
