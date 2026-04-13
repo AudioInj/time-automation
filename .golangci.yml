@@ -16,8 +16,3 @@ linters:
     errcheck:
       # Don't flag explicit blank-id assignments (_, err) or (x, _)
       check-blank: false
-    misspell:
-      # The web package uses intentional German strings in HTML templates and tests.
-      # "Konfiguration" is the correct German translation of "Configuration".
-      ignore-words:
-        - Konfiguration
