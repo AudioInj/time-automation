@@ -1,0 +1,32 @@
+services:
+  time-automation:
+    image: ghcr.io/audioinj/time-automation:latest
+    container_name: time-automation
+    restart: unless-stopped
+    volumes:
+      - time-automation-state:/data
+    environment:
+      - DOMAIN=${DOMAIN}
+      - SUBDOMAIN=${SUBDOMAIN}
+      - USERNAME=${USERNAME}
+      - PASSWORD=${PASSWORD}
+      - WEBHOOK_URL=${WEBHOOK_URL:-}
+      - WORK_DAYS=${WORK_DAYS:-1-5}
+      - START_WORK_MIN=${START_WORK_MIN:-7:30}
+      - START_WORK_MAX=${START_WORK_MAX:-8:30}
+      - START_BREAK_MIN=${START_BREAK_MIN:-11:45}
+      - START_BREAK_MAX=${START_BREAK_MAX:-12:30}
+      - MIN_WORK_DURATION=${MIN_WORK_DURATION:-8.5h}
+      - MAX_WORK_DURATION=${MAX_WORK_DURATION:-9.5h}
+      - MIN_BREAK_DURATION=${MIN_BREAK_DURATION:-0.75h}
+      - MAX_BREAK_DURATION=${MAX_BREAK_DURATION:-1.25h}
+      - TASK=${TASK:-}
+      - HOLIDAY_ADDRESS=${HOLIDAY_ADDRESS:-}
+      - VACATION_ADDRESS=${VACATION_ADDRESS:-}
+      - VACATION_KEYWORD=${VACATION_KEYWORD:-}
+      - VERBOSE=${VERBOSE:-false}
+      - DRY_RUN=${DRY_RUN:-false}
+      - STATE_FILE=/data/state.json
+
+volumes:
+  time-automation-state:

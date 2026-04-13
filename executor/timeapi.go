@@ -138,7 +138,17 @@ func (e *Executor) post(status interface{}) {
 		if err == nil && resp.StatusCode >= 200 && resp.StatusCode < 300 {
 			break
 		}
-		log.Printf("[POST] Attempt %d failed: %v", attempt, err)
+		if err == nil && resp.StatusCode == 401 {
+			log.Printf("[POST] Attempt %d: token expired (401), re-authenticating...", attempt)
+			e.token = ""
+			e.token = e.login()
+			if e.token == "" {
+				log.Println("[POST] Re-authentication failed, aborting")
+				return
+			}
+		} else {
+			log.Printf("[POST] Attempt %d failed: %v", attempt, err)
+		}
 		time.Sleep(1 * time.Second)
 	}
 	if err != nil || resp == nil || resp.StatusCode < 200 || resp.StatusCode >= 300 {
