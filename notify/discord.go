@@ -3,20 +3,26 @@ package notify
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"log"
 	"net/http"
+	"time"
 )
 
 type Notifier struct {
 	webhook string
+	client  *http.Client
 }
 
 func New(url string) *Notifier {
-	return &Notifier{webhook: url}
+	return &Notifier{
+		webhook: url,
+		client:  &http.Client{Timeout: 30 * time.Second},
+	}
 }
 
-func (n *Notifier) Send(status, message string) {
+func (n *Notifier) Send(ctx context.Context, status, message string) {
 	if n.webhook == "" {
 		return
 	}
@@ -30,7 +36,13 @@ func (n *Notifier) Send(status, message string) {
 		},
 	}
 	data, _ := json.Marshal(payload)
-	resp, err := http.Post(n.webhook, "application/json", bytes.NewBuffer(data))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, n.webhook, bytes.NewBuffer(data))
+	if err != nil {
+		log.Printf("[NOTIFY] Failed to create request: %v", err)
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := n.client.Do(req)
 	if err != nil {
 		log.Printf("[NOTIFY] Failed to send Discord message: %v", err)
 		return

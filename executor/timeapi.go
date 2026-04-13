@@ -3,7 +3,9 @@ package executor
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"time"
@@ -13,15 +15,19 @@ import (
 )
 
 type Executor struct {
-	cfg      config.Config
-	token    string
-	notifier *notify.Notifier
+	cfg        config.Config
+	token      string
+	notifier   *notify.Notifier
+	client     *http.Client
+	retrySleep time.Duration
 }
 
 func New(cfg config.Config) *Executor {
 	return &Executor{
-		cfg:      cfg,
-		notifier: notify.New(cfg.WebhookURL),
+		cfg:        cfg,
+		notifier:   notify.New(cfg.WebhookURL),
+		client:     &http.Client{Timeout: 30 * time.Second},
+		retrySleep: time.Second,
 	}
 }
 
@@ -31,20 +37,28 @@ func (e *Executor) VerboseLog(msg string) {
 	}
 }
 
-func (e *Executor) login() string {
+func (e *Executor) login(ctx context.Context) string {
 	payload := map[string]string{
 		"username": e.cfg.Username,
 		"password": e.cfg.Password,
 	}
 	data, _ := json.Marshal(payload)
-	url := "https://" + e.cfg.Subdomain + "." + e.cfg.Domain + "/api/login"
+	url := fmt.Sprintf("https://%s.%s/api/login", e.cfg.Subdomain, e.cfg.Domain)
 	log.Println("[LOGIN] Attempting login at:", url)
 	e.VerboseLog("POST " + url)
-	resp, err := http.Post(url, "application/json", bytes.NewBuffer(data))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewBuffer(data))
 	if err != nil {
 		msg := "Login failed: " + err.Error()
 		log.Println("[LOGIN] " + msg)
-		e.notifier.Send("Login Failed", msg)
+		e.notifier.Send(ctx, "Login Failed", msg)
+		return ""
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := e.client.Do(req)
+	if err != nil {
+		msg := "Login failed: " + err.Error()
+		log.Println("[LOGIN] " + msg)
+		e.notifier.Send(ctx, "Login Failed", msg)
 		return ""
 	}
 	defer resp.Body.Close()
@@ -61,14 +75,14 @@ func (e *Executor) login() string {
 	if token == "" {
 		msg := "Login failed: no token received"
 		log.Println("[LOGIN] " + msg)
-		e.notifier.Send("Login Failed", msg)
+		e.notifier.Send(ctx, "Login Failed", msg)
 	} else {
 		log.Println("[LOGIN] Token received successfully")
 	}
 	return token
 }
 
-func (e *Executor) post(status interface{}) {
+func (e *Executor) post(ctx context.Context, status interface{}) {
 	log.Printf("[POST] Preparing to post time entry with status: %v", status)
 	if e.cfg.DryRun {
 		log.Println("[POST] DRY_RUN enabled: would POST /api/post-time")
@@ -115,7 +129,7 @@ func (e *Executor) post(status interface{}) {
 	}
 
 	data, _ := json.Marshal(payload)
-	url := "https://" + e.cfg.Subdomain + "." + e.cfg.Domain + "/api/post-time"
+	url := fmt.Sprintf("https://%s.%s/api/post-time", e.cfg.Subdomain, e.cfg.Domain)
 	log.Println("[POST] POST", url, "payload:", string(data))
 	e.VerboseLog("POST " + url + " payload: " + string(data))
 
@@ -123,38 +137,43 @@ func (e *Executor) post(status interface{}) {
 	var err error
 	maxRetries := 5
 	for attempt := 1; attempt <= maxRetries; attempt++ {
-		// Re-login if token is missing or was cleared after a 401/403
+		// Re-login if token is missing or was cleared after a 401
 		if e.token == "" {
 			log.Printf("[POST] No token (attempt %d/%d), logging in...", attempt, maxRetries)
-			e.token = e.login()
+			e.token = e.login(ctx)
 			if e.token == "" {
 				log.Printf("[POST] Login failed on attempt %d, retrying...", attempt)
-				time.Sleep(1 * time.Second)
+				time.Sleep(e.retrySleep)
 				continue
 			}
 		}
 
-		req, _ := http.NewRequest("POST", url, bytes.NewBuffer(data))
+		req, _ := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewBuffer(data))
 		req.Header.Set("Authorization", e.token)
 		req.Header.Set("Content-Type", "application/json")
-		client := &http.Client{}
-		resp, err = client.Do(req)
-		if err == nil && resp.StatusCode >= 200 && resp.StatusCode < 300 {
-			break
+		resp, err = e.client.Do(req)
+		if err != nil {
+			log.Printf("[POST] Attempt %d failed: %v", attempt, err)
+			time.Sleep(e.retrySleep)
+			continue
 		}
-		if err == nil && resp.StatusCode == 401 {
+		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+			break // success: body closed via defer below
+		}
+		if resp.StatusCode == 401 {
 			log.Printf("[POST] Attempt %d: token expired (401), re-authenticating...", attempt)
+			resp.Body.Close()
 			e.token = ""
-			e.token = e.login()
+			e.token = e.login(ctx)
 			if e.token == "" {
 				log.Println("[POST] Re-authentication failed, aborting")
 				return
 			}
 		} else {
-			log.Printf("[POST] Attempt %d failed: %v", attempt, err)
+			log.Printf("[POST] Attempt %d failed: status %s", attempt, resp.Status)
+			resp.Body.Close()
 		}
-
-		time.Sleep(1 * time.Second)
+		time.Sleep(e.retrySleep)
 	}
 	if err != nil || resp == nil || resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		var msg string
@@ -166,7 +185,7 @@ func (e *Executor) post(status interface{}) {
 			msg = "Failed to post after 5 attempts: unknown error"
 		}
 		log.Println("[POST] " + msg)
-		e.notifier.Send("Post Failed @here", msg)
+		e.notifier.Send(ctx, "Post Failed @here", msg)
 		return
 	}
 	defer resp.Body.Close()
@@ -182,7 +201,7 @@ func toString(v interface{}) string {
 	return string(b)
 }
 
-func (e *Executor) StartWork()  { e.post("Start") }
-func (e *Executor) StopWork()   { e.post("Stop") }
-func (e *Executor) StartBreak() { e.post(false) }
-func (e *Executor) StopBreak()  { e.post(true) }
+func (e *Executor) StartWork(ctx context.Context)  { e.post(ctx, "Start") }
+func (e *Executor) StopWork(ctx context.Context)   { e.post(ctx, "Stop") }
+func (e *Executor) StartBreak(ctx context.Context) { e.post(ctx, false) }
+func (e *Executor) StopBreak(ctx context.Context)  { e.post(ctx, true) }

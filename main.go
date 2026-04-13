@@ -40,7 +40,14 @@ func main() {
 			log.Println("[STOP] Shutting down gracefully.")
 			return
 		case <-ticker.C:
-			sched.Run()
+			func() {
+				defer func() {
+					if r := recover(); r != nil {
+						log.Printf("[PANIC] recovered from panic in scheduler: %v", r)
+					}
+				}()
+				sched.Run(ctx)
+			}()
 		}
 	}
 }

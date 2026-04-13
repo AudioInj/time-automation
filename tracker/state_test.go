@@ -2,6 +2,7 @@ package tracker
 
 import (
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -146,5 +147,34 @@ func TestNetWorkDurationNoBreak(t *testing.T) {
 	want := 8*time.Hour + 30*time.Minute
 	if got != want {
 		t.Errorf("NetWorkDuration() = %v, want %v", got, want)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Corrupted state file
+// ---------------------------------------------------------------------------
+
+func TestCorruptedStateFileIgnored(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.json")
+
+	// Write deliberately broken JSON
+	if err := os.WriteFile(path, []byte("{corrupted json!!!"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// New() should not panic; the corrupt file is silently discarded.
+	tr := New(path)
+
+	// All dates must return an empty state.
+	got := tr.Load("2024-01-01")
+	if got.WorkStarted || got.IsHoliday || got.IsVacation {
+		t.Errorf("expected zero-value state after corrupt load, got %+v", got)
+	}
+
+	// Normal save/load must work after a corrupt start.
+	tr.Save("2024-01-01", DayState{WorkStarted: true})
+	got = tr.Load("2024-01-01")
+	if !got.WorkStarted {
+		t.Error("expected WorkStarted=true after save following corrupt load")
 	}
 }
