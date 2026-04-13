@@ -58,7 +58,7 @@ func (n *Notifier) Send(ctx context.Context, status, message string) {
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := n.client.Do(req)
 	if err != nil {
-		log.Printf("[NOTIFY] Failed to send Discord message: %v", err)
+		log.Printf("[NOTIFY] Failed to send webhook notification: %v", err)
 		return
 	}
 	defer resp.Body.Close() //nolint:errcheck
