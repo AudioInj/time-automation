@@ -149,7 +149,11 @@ func (e *Executor) post(ctx context.Context, status interface{}) {
 			e.token = e.login(ctx)
 			if e.token == "" {
 				log.Printf("[POST] Login failed on attempt %d, retrying...", attempt)
-				time.Sleep(e.retrySleep)
+				select {
+				case <-time.After(e.retrySleep):
+				case <-ctx.Done():
+					return
+				}
 				continue
 			}
 		}
@@ -160,7 +164,11 @@ func (e *Executor) post(ctx context.Context, status interface{}) {
 		resp, err = e.client.Do(req)
 		if err != nil {
 			log.Printf("[POST] Attempt %d failed: %v", attempt, err)
-			time.Sleep(e.retrySleep)
+			select {
+			case <-time.After(e.retrySleep):
+			case <-ctx.Done():
+				return
+			}
 			continue
 		}
 		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
@@ -179,7 +187,11 @@ func (e *Executor) post(ctx context.Context, status interface{}) {
 			log.Printf("[POST] Attempt %d failed: status %s", attempt, resp.Status)
 			_ = resp.Body.Close()
 		}
-		time.Sleep(e.retrySleep)
+		select {
+		case <-time.After(e.retrySleep):
+		case <-ctx.Done():
+			return
+		}
 	}
 	if err != nil || resp == nil || resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		var msg string

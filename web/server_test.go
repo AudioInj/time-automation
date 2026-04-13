@@ -22,7 +22,7 @@ func makeServer(t *testing.T) *Server {
 		Username:  "testuser",
 		WorkDays:  "1-5",
 		Task:      "Dev",
-	}, state, nil, ":0")
+	}, state, nil, nil, ":0")
 }
 
 func TestIndexReturns200(t *testing.T) {
@@ -88,7 +88,7 @@ func TestAPIStatusNoPasswordInResponse(t *testing.T) {
 	s := New(config.Config{
 		Password:   "supersecret",
 		WebhookURL: "https://discord.com/api/webhooks/secret",
-	}, state, nil, ":0")
+	}, state, nil, nil, ":0")
 
 	req := httptest.NewRequest(http.MethodGet, "/api/status", nil)
 	w := httptest.NewRecorder()

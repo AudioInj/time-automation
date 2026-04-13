@@ -6,6 +6,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 )
@@ -147,18 +148,37 @@ func (s *StateTracker) loadFile() {
 }
 
 func (s *StateTracker) saveFile() {
-	file, err := os.OpenFile(s.path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
+	// Write to a temp file in the same directory, then rename atomically.
+	// This prevents a partial write from corrupting the state on crash.
+	dir := filepath.Dir(s.path)
+	tmp, err := os.CreateTemp(dir, ".state-*.tmp")
 	if err != nil {
-		log.Printf("[STATE] Failed to open state file for writing: %v", err)
+		log.Printf("[STATE] Failed to create temp file: %v", err)
 		return
 	}
-	defer file.Close() //nolint:errcheck
-	enc := json.NewEncoder(file)
+	tmpName := tmp.Name()
+
+	enc := json.NewEncoder(tmp)
 	enc.SetIndent("", "  ")
 	if err := enc.Encode(s.data); err != nil {
 		log.Printf("[STATE] Failed to encode state: %v", err)
+		_ = tmp.Close()
+		_ = os.Remove(tmpName)
+		return
 	}
-	if err := file.Sync(); err != nil {
-		log.Printf("[STATE] Failed to sync state file: %v", err)
+	if err := tmp.Sync(); err != nil {
+		log.Printf("[STATE] Failed to sync state: %v", err)
+		_ = tmp.Close()
+		_ = os.Remove(tmpName)
+		return
+	}
+	if err := tmp.Close(); err != nil {
+		log.Printf("[STATE] Failed to close temp file: %v", err)
+		_ = os.Remove(tmpName)
+		return
+	}
+	if err := os.Rename(tmpName, s.path); err != nil {
+		log.Printf("[STATE] Failed to commit state file: %v", err)
+		_ = os.Remove(tmpName)
 	}
 }

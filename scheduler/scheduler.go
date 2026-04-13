@@ -37,6 +37,11 @@ type Scheduler struct {
 }
 
 func New(cfg config.Config, s *tracker.StateTracker, e *executor.Executor, n *notify.Notifier) *Scheduler {
+	if cfg.ICSCacheDir != "" {
+		if err := os.MkdirAll(cfg.ICSCacheDir, 0750); err != nil {
+			log.Printf("[SCHEDULER] Failed to create ICS cache dir %s: %v", cfg.ICSCacheDir, err)
+		}
+	}
 	return &Scheduler{
 		cfg:             cfg,
 		state:           s,

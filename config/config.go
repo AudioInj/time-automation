@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -38,6 +39,28 @@ type Config struct {
 	HolidayAddress  string
 	VacationAddress string
 	VacationKeyword string
+}
+
+// validateWorkDays checks that the WORK_DAYS value is a comma-separated list
+// of day numbers (0–6) or ranges (e.g. "1-5", "1,3,5", "0,6").
+func validateWorkDays(s string) error {
+	for _, part := range strings.Split(s, ",") {
+		part = strings.TrimSpace(part)
+		if strings.Contains(part, "-") {
+			bounds := strings.SplitN(part, "-", 2)
+			start, err1 := strconv.Atoi(strings.TrimSpace(bounds[0]))
+			end, err2 := strconv.Atoi(strings.TrimSpace(bounds[1]))
+			if err1 != nil || err2 != nil || start < 0 || end > 6 || start > end {
+				return fmt.Errorf("invalid range %q (use day numbers 0-6, e.g. \"1-5\")", part)
+			}
+		} else {
+			day, err := strconv.Atoi(part)
+			if err != nil || day < 0 || day > 6 {
+				return fmt.Errorf("invalid day %q (expected a number 0-6)", part)
+			}
+		}
+	}
+	return nil
 }
 
 // Load reads configuration from environment variables.
@@ -117,6 +140,13 @@ func Load() (*Config, error) {
 		HolidayAddress:  os.Getenv("HOLIDAY_ADDRESS"),
 		VacationAddress: os.Getenv("VACATION_ADDRESS"),
 		VacationKeyword: os.Getenv("VACATION_KEYWORD"),
+	}
+
+	// WorkDays format validation
+	if cfg.WorkDays != "" {
+		if err := validateWorkDays(cfg.WorkDays); err != nil {
+			errs = append(errs, "  WORK_DAYS: "+err.Error())
+		}
 	}
 
 	// Required field validation

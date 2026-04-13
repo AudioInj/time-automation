@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/audioinj/time-automation/config"
+	"github.com/audioinj/time-automation/notify"
 	"github.com/audioinj/time-automation/tracker"
 )
 
@@ -25,15 +26,16 @@ type Executor interface {
 
 // Server serves the status web UI.
 type Server struct {
-	cfg   config.Config
-	state *tracker.StateTracker
-	exec  Executor
-	srv   *http.Server
+	cfg      config.Config
+	state    *tracker.StateTracker
+	exec     Executor
+	notifier *notify.Notifier
+	srv      *http.Server
 }
 
 // New creates a Server that listens on addr (e.g. ":8077").
-func New(cfg config.Config, state *tracker.StateTracker, exec Executor, addr string) *Server {
-	s := &Server{cfg: cfg, state: state, exec: exec}
+func New(cfg config.Config, state *tracker.StateTracker, exec Executor, notifier *notify.Notifier, addr string) *Server {
+	s := &Server{cfg: cfg, state: state, exec: exec, notifier: notifier}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", s.handleIndex)
 	mux.HandleFunc("/api/status", s.handleAPIStatus)
@@ -288,6 +290,9 @@ func (s *Server) handleAction(w http.ResponseWriter, r *http.Request) {
 			st.WorkStartTime = now
 			s.state.Save(today, st)
 			log.Printf("[WEB] Manual action: start_work at %s", now.Format("15:04:05"))
+			if s.notifier != nil {
+				s.notifier.Send(r.Context(), "▶️ Arbeit gestartet", now.Format("15:04:05")+" (manuell)")
+			}
 		}
 	case "stop_work":
 		if st.WorkStarted && !st.WorkStopped {
@@ -298,6 +303,10 @@ func (s *Server) handleAction(w http.ResponseWriter, r *http.Request) {
 			st.WorkStopTime = now
 			s.state.Save(today, st)
 			log.Printf("[WEB] Manual action: stop_work at %s", now.Format("15:04:05"))
+			if s.notifier != nil {
+				s.notifier.Send(r.Context(), "⏹️ Arbeit beendet",
+					fmt.Sprintf("%s (manuell)  ·  Nettozeit: %s", now.Format("15:04:05"), fmtDur(st.NetWorkDuration())))
+			}
 		}
 	case "start_break":
 		if st.WorkStarted && !st.BreakStarted {
@@ -308,6 +317,9 @@ func (s *Server) handleAction(w http.ResponseWriter, r *http.Request) {
 			st.BreakStartTime = now
 			s.state.Save(today, st)
 			log.Printf("[WEB] Manual action: start_break at %s", now.Format("15:04:05"))
+			if s.notifier != nil {
+				s.notifier.Send(r.Context(), "⏸️ Pause gestartet", now.Format("15:04:05")+" (manuell)")
+			}
 		}
 	case "stop_break":
 		if st.BreakStarted && !st.BreakStopped {
@@ -318,6 +330,9 @@ func (s *Server) handleAction(w http.ResponseWriter, r *http.Request) {
 			st.BreakStopTime = now
 			s.state.Save(today, st)
 			log.Printf("[WEB] Manual action: stop_break at %s", now.Format("15:04:05"))
+			if s.notifier != nil {
+				s.notifier.Send(r.Context(), "▶️ Pause beendet", now.Format("15:04:05")+" (manuell)")
+			}
 		}
 	default:
 		http.Error(w, "unknown action", http.StatusBadRequest)
