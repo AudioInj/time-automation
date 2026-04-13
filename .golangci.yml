@@ -18,7 +18,6 @@ linters-settings:
     check-blank: false
   misspell:
     # The web package uses intentional German strings in HTML templates and tests.
-    # "Konfiguration" is flagged as a misspelling of "Configuration" by misspell,
-    # but it is the correct German translation.
+    # "Konfiguration" is the correct German translation of "Configuration".
     ignore-words:
       - Konfiguration
