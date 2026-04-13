@@ -50,7 +50,9 @@ func (e *Executor) login() string {
 	defer resp.Body.Close()
 
 	var rawResp map[string]interface{}
-	json.NewDecoder(resp.Body).Decode(&rawResp)
+	if err := json.NewDecoder(resp.Body).Decode(&rawResp); err != nil {
+		log.Println("[LOGIN] Failed to decode response:", err)
+	}
 	rawBytes, _ := json.Marshal(rawResp)
 	log.Println("[LOGIN] Raw response:", string(rawBytes))
 	e.VerboseLog("Login response: " + string(rawBytes))

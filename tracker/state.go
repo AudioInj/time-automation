@@ -102,7 +102,9 @@ func (s *StateTracker) loadFile() {
 	}
 	defer file.Close()
 	content, _ := io.ReadAll(file)
-	json.Unmarshal(content, &s.data)
+	if err := json.Unmarshal(content, &s.data); err != nil {
+		log.Printf("[STATE] Failed to parse state file: %v", err)
+	}
 }
 
 func (s *StateTracker) saveFile() {
