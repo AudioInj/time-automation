@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/audioinj/time-automation/config"
 	"github.com/audioinj/time-automation/tracker"
@@ -21,7 +22,7 @@ func makeServer(t *testing.T) *Server {
 		Username:  "testuser",
 		WorkDays:  "1-5",
 		Task:      "Dev",
-	}, state, ":0")
+	}, state, nil, ":0")
 }
 
 func TestIndexReturns200(t *testing.T) {
@@ -87,7 +88,7 @@ func TestAPIStatusNoPasswordInResponse(t *testing.T) {
 	s := New(config.Config{
 		Password:   "supersecret",
 		WebhookURL: "https://discord.com/api/webhooks/secret",
-	}, state, ":0")
+	}, state, nil, ":0")
 
 	req := httptest.NewRequest(http.MethodGet, "/api/status", nil)
 	w := httptest.NewRecorder()
@@ -99,6 +100,48 @@ func TestAPIStatusNoPasswordInResponse(t *testing.T) {
 	}
 	if strings.Contains(body, "discord.com") {
 		t.Error("webhook URL must not appear in API response")
+	}
+}
+
+func TestActionStartWork(t *testing.T) {
+	s := makeServer(t)
+	today := time.Now().Format("2006-01-02")
+
+	req := httptest.NewRequest(http.MethodPost, "/api/action", strings.NewReader("action=start_work"))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w := httptest.NewRecorder()
+	s.handleAction(w, req)
+
+	if w.Code != http.StatusSeeOther {
+		t.Errorf("expected 303 redirect, got %d", w.Code)
+	}
+	st := s.state.Load(today)
+	if !st.WorkStarted {
+		t.Error("expected WorkStarted=true after start_work action")
+	}
+	if st.WorkStartTime.IsZero() {
+		t.Error("expected WorkStartTime to be set")
+	}
+}
+
+func TestActionRejectsGet(t *testing.T) {
+	s := makeServer(t)
+	req := httptest.NewRequest(http.MethodGet, "/api/action", nil)
+	w := httptest.NewRecorder()
+	s.handleAction(w, req)
+	if w.Code != http.StatusMethodNotAllowed {
+		t.Errorf("expected 405, got %d", w.Code)
+	}
+}
+
+func TestActionUnknown(t *testing.T) {
+	s := makeServer(t)
+	req := httptest.NewRequest(http.MethodPost, "/api/action", strings.NewReader("action=invalid"))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w := httptest.NewRecorder()
+	s.handleAction(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d", w.Code)
 	}
 }
 
