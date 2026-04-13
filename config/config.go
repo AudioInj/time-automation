@@ -4,17 +4,19 @@ package config
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 )
 
 type Config struct {
-	Domain     string
-	Subdomain  string
-	Username   string
-	Password   string
-	WebhookURL string
-	StateFile  string
+	Domain      string
+	Subdomain   string
+	Username    string
+	Password    string
+	WebhookURL  string
+	StateFile   string
+	ICSCacheDir string
 
 	StartWorkMin  time.Time
 	StartWorkMax  time.Time
@@ -42,12 +44,16 @@ type Config struct {
 // sees every misconfigured variable in a single startup message.
 func Load() (*Config, error) {
 	var errs []string
+	parseOK := map[string]bool{}
 
 	parseTime := func(key string) time.Time {
 		val := os.Getenv(key)
 		t, err := time.Parse("15:04", val)
 		if err != nil {
 			errs = append(errs, fmt.Sprintf("  %s: invalid time %q (expected HH:MM)", key, val))
+			parseOK[key] = false
+		} else {
+			parseOK[key] = true
 		}
 		return t
 	}
@@ -57,6 +63,9 @@ func Load() (*Config, error) {
 		d, err := time.ParseDuration(val)
 		if err != nil {
 			errs = append(errs, fmt.Sprintf("  %s: invalid duration %q (e.g. 8.5h)", key, val))
+			parseOK[key] = false
+		} else {
+			parseOK[key] = true
 		}
 		return d
 	}
@@ -66,13 +75,19 @@ func Load() (*Config, error) {
 		stateFile = "/app/state.json"
 	}
 
+	icsDir := os.Getenv("ICS_CACHE_DIR")
+	if icsDir == "" {
+		icsDir = filepath.Dir(stateFile)
+	}
+
 	cfg := &Config{
-		Domain:     os.Getenv("DOMAIN"),
-		Subdomain:  os.Getenv("SUBDOMAIN"),
-		Username:   os.Getenv("USERNAME"),
-		Password:   os.Getenv("PASSWORD"),
-		WebhookURL: os.Getenv("WEBHOOK_URL"),
-		StateFile:  stateFile,
+		Domain:      os.Getenv("DOMAIN"),
+		Subdomain:   os.Getenv("SUBDOMAIN"),
+		Username:    os.Getenv("USERNAME"),
+		Password:    os.Getenv("PASSWORD"),
+		WebhookURL:  os.Getenv("WEBHOOK_URL"),
+		StateFile:   stateFile,
+		ICSCacheDir: icsDir,
 
 		StartWorkMin:  parseTime("START_WORK_MIN"),
 		StartWorkMax:  parseTime("START_WORK_MAX"),
@@ -93,6 +108,20 @@ func Load() (*Config, error) {
 		HolidayAddress:  os.Getenv("HOLIDAY_ADDRESS"),
 		VacationAddress: os.Getenv("VACATION_ADDRESS"),
 		VacationKeyword: os.Getenv("VACATION_KEYWORD"),
+	}
+
+	// Logical constraint validation (only when both values parsed successfully)
+	if parseOK["START_WORK_MIN"] && parseOK["START_WORK_MAX"] && cfg.StartWorkMax.Before(cfg.StartWorkMin) {
+		errs = append(errs, "  START_WORK_MAX must not be before START_WORK_MIN")
+	}
+	if parseOK["START_BREAK_MIN"] && parseOK["START_BREAK_MAX"] && cfg.StartBreakMax.Before(cfg.StartBreakMin) {
+		errs = append(errs, "  START_BREAK_MAX must not be before START_BREAK_MIN")
+	}
+	if parseOK["MIN_WORK_DURATION"] && parseOK["MAX_WORK_DURATION"] && cfg.MaxWorkDuration < cfg.MinWorkDuration {
+		errs = append(errs, "  MAX_WORK_DURATION must not be less than MIN_WORK_DURATION")
+	}
+	if parseOK["MIN_BREAK_DURATION"] && parseOK["MAX_BREAK_DURATION"] && cfg.MaxBreakDuration < cfg.MinBreakDuration {
+		errs = append(errs, "  MAX_BREAK_DURATION must not be less than MIN_BREAK_DURATION")
 	}
 
 	if len(errs) > 0 {

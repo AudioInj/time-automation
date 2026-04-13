@@ -2,12 +2,14 @@
 package scheduler
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"log"
 	"math/rand"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -31,6 +33,7 @@ type Scheduler struct {
 	holidayCheckedType string
 
 	calendarFetchedDay int // Track last day calendars were fetched
+	httpClient         *http.Client
 }
 
 func New(cfg config.Config, s *tracker.StateTracker, e *executor.Executor, n *notify.Notifier) *Scheduler {
@@ -41,6 +44,7 @@ func New(cfg config.Config, s *tracker.StateTracker, e *executor.Executor, n *no
 		notify:          n,
 		randomizedTimes: make(map[string]time.Time),
 		randomizedDay:   -1,
+		httpClient:      &http.Client{Timeout: 30 * time.Second},
 	}
 }
 
@@ -66,7 +70,7 @@ func randomDuration(min, max time.Duration) time.Duration {
 }
 
 // Call this once per day to randomize all times and print them
-func (s *Scheduler) randomizeAllTimes(now time.Time) {
+func (s *Scheduler) randomizeAllTimes(ctx context.Context, now time.Time) {
 	today := now.Format("2006-01-02")
 	st := s.state.Load(today)
 
@@ -142,15 +146,15 @@ func (s *Scheduler) randomizeAllTimes(now time.Time) {
 	log.Println("[PLANNED TIMES]\n" + plannedMsg)
 	// Only send notification if webhook is set
 	if s.notify != nil && s.cfg.WebhookURL != "" {
-		s.notify.Send("Planned Times", plannedMsg)
+		s.notify.Send(ctx, "Planned Times", plannedMsg)
 	}
 }
 
-func (s *Scheduler) fetchCalendar(url, cachePath string, useAuth bool) ([]byte, error) {
+func (s *Scheduler) fetchCalendar(ctx context.Context, url, cachePath string, useAuth bool) ([]byte, error) {
 	if url == "" {
 		return nil, nil
 	}
-	data, err := s.fetchCalendarRemote(url, cachePath, useAuth)
+	data, err := s.fetchCalendarRemote(ctx, url, cachePath, useAuth)
 	if err == nil {
 		return data, nil
 	}
@@ -165,21 +169,16 @@ func (s *Scheduler) fetchCalendar(url, cachePath string, useAuth bool) ([]byte, 
 }
 
 // fetchCalendarRemote performs the actual HTTP request and caches the result on success.
-func (s *Scheduler) fetchCalendarRemote(url, cachePath string, useAuth bool) ([]byte, error) {
-	var resp *http.Response
-	var err error
-
-	if useAuth {
-		req, reqErr := http.NewRequest("GET", url, nil)
-		if reqErr != nil {
-			log.Printf("[INIT] Failed to create request for %s: %v", url, reqErr)
-			return nil, reqErr
-		}
-		req.SetBasicAuth(s.cfg.Username+"@"+s.cfg.Domain, s.cfg.Password)
-		resp, err = (&http.Client{}).Do(req)
-	} else {
-		resp, err = http.Get(url)
+func (s *Scheduler) fetchCalendarRemote(ctx context.Context, url, cachePath string, useAuth bool) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		log.Printf("[INIT] Failed to create request for %s: %v", url, err)
+		return nil, err
 	}
+	if useAuth {
+		req.SetBasicAuth(s.cfg.Username+"@"+s.cfg.Domain, s.cfg.Password)
+	}
+	resp, err := s.httpClient.Do(req)
 	if err != nil {
 		log.Printf("[INIT] Failed to fetch calendar from %s: %v", url, err)
 		return nil, err
@@ -198,28 +197,31 @@ func (s *Scheduler) fetchCalendarRemote(url, cachePath string, useAuth bool) ([]
 	return data, nil
 }
 
-func (s *Scheduler) isTodayHolidayOrVacation(now time.Time) (bool, string, string) {
+func (s *Scheduler) isTodayHolidayOrVacation(ctx context.Context, now time.Time) (bool, string, string) {
+	holidayPath := filepath.Join(s.cfg.ICSCacheDir, "holiday.ics")
+	vacationPath := filepath.Join(s.cfg.ICSCacheDir, "vacation.ics")
+
 	// Fetch calendars only once per day
 	if s.calendarFetchedDay != now.YearDay() {
 		s.calendarFetchedDay = now.YearDay()
 		log.Println("[INIT] Fetching holiday and vacation calendars...")
 		if s.cfg.HolidayAddress != "" {
-			_, _ = s.fetchCalendar(s.cfg.HolidayAddress, "holiday.ics", false)
+			_, _ = s.fetchCalendar(ctx, s.cfg.HolidayAddress, holidayPath, false)
 		}
 		if s.cfg.VacationAddress != "" {
-			_, _ = s.fetchCalendar(s.cfg.VacationAddress, "vacation.ics", true)
+			_, _ = s.fetchCalendar(ctx, s.cfg.VacationAddress, vacationPath, true)
 		}
 	}
 	// Try to extract holiday name if present
 	holidayName := ""
 	if s.cfg.HolidayAddress != "" {
-		holidayName = getICSTodaySummary("holiday.ics", now)
+		holidayName = getICSTodaySummary(holidayPath, now)
 		if holidayName != "" {
 			log.Printf("[SCHEDULER] Today is a public holiday (%s): %s", now.Format("2006-01-02"), holidayName)
 			return true, "Public holiday", holidayName
 		}
 	}
-	if s.cfg.VacationAddress != "" && isICSToday("vacation.ics", now, s.cfg.VacationKeyword) {
+	if s.cfg.VacationAddress != "" && isICSToday(vacationPath, now, s.cfg.VacationKeyword) {
 		log.Printf("[SCHEDULER] Today is a vacation day (%s)", now.Format("2006-01-02"))
 		return true, "Vacation", ""
 	}
@@ -307,7 +309,7 @@ func (s *Scheduler) verboseLog(msg string) {
 	}
 }
 
-func (s *Scheduler) Run() {
+func (s *Scheduler) Run(ctx context.Context) {
 	now := time.Now()
 
 	// Only check for holiday/vacation if today is a workday
@@ -317,7 +319,7 @@ func (s *Scheduler) Run() {
 
 		// Only check and notify if not already marked as holiday/vacation in state and not already checked in memory
 		if !(st.IsHoliday || st.IsVacation) && s.holidayCheckedDay != now.YearDay() {
-			if isHoliday, reason, holidayName := s.isTodayHolidayOrVacation(now); isHoliday {
+			if isHoliday, reason, holidayName := s.isTodayHolidayOrVacation(ctx, now); isHoliday {
 				var msg string
 				checkedType := ""
 				if reason == "Public holiday" {
@@ -338,7 +340,7 @@ func (s *Scheduler) Run() {
 				}
 				log.Println("[SCHEDULER]", msg)
 				if s.notify != nil && s.cfg.WebhookURL != "" {
-					s.notify.Send(reason, msg)
+					s.notify.Send(ctx, reason, msg)
 				}
 				st.DayNote = reason
 				s.state.Save(today, st)
@@ -357,7 +359,7 @@ func (s *Scheduler) Run() {
 
 	// Randomize times once per day (at midnight or first run of the day)
 	if s.randomizedDay != now.YearDay() {
-		s.randomizeAllTimes(now)
+		s.randomizeAllTimes(ctx, now)
 	}
 
 	today := now.Format("2006-01-02")
@@ -371,7 +373,7 @@ func (s *Scheduler) Run() {
 
 	if now.After(s.randomizedTimes["START_WORK"]) && !st.WorkStarted {
 		log.Println("[SCHEDULER] Triggering StartWork")
-		s.executor.StartWork()
+		s.executor.StartWork(ctx)
 		st.WorkStarted = true
 		st.WorkStartTime = time.Now()
 		s.state.Save(today, st)
@@ -381,7 +383,7 @@ func (s *Scheduler) Run() {
 
 	if st.WorkStarted && !st.BreakStarted && !st.BreakStopped && now.After(s.randomizedTimes["START_BREAK"]) {
 		log.Println("[SCHEDULER] Triggering StartBreak")
-		s.executor.StartBreak()
+		s.executor.StartBreak(ctx)
 		st.BreakStarted = true
 		st.BreakStartTime = time.Now()
 		s.state.Save(today, st)
@@ -394,7 +396,7 @@ func (s *Scheduler) Run() {
 		minBreakMet := time.Since(st.BreakStartTime) >= s.cfg.MinBreakDuration
 		afterPlannedStop := now.After(plannedStopBreak)
 		if minBreakMet && afterPlannedStop {
-			s.executor.StopBreak()
+			s.executor.StopBreak(ctx)
 			st.BreakStopped = true
 			s.state.Save(today, st)
 			log.Printf("[STATE] Updated: break_stopped=true for %s", today)
@@ -408,7 +410,7 @@ func (s *Scheduler) Run() {
 
 	if st.WorkStarted && !st.WorkStopped && now.After(s.randomizedTimes["STOP_WORK"]) {
 		if time.Since(st.WorkStartTime) >= s.cfg.MinWorkDuration {
-			s.executor.StopWork()
+			s.executor.StopWork(ctx)
 			st.WorkStopped = true
 			s.state.Save(today, st)
 			log.Printf("[STATE] Updated: work_stopped=true for %s", today)

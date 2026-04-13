@@ -114,3 +114,55 @@ func TestLoadDryRunAndVerbose(t *testing.T) {
 		t.Error("Verbose should be true")
 	}
 }
+
+func TestLoadDefaultICSCacheDir(t *testing.T) {
+	validEnv(t)
+	t.Setenv("STATE_FILE", "/data/state.json")
+	t.Setenv("ICS_CACHE_DIR", "")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ICSCacheDir != "/data" {
+		t.Errorf("ICSCacheDir = %q, want /data", cfg.ICSCacheDir)
+	}
+}
+
+func TestLoadCustomICSCacheDir(t *testing.T) {
+	validEnv(t)
+	t.Setenv("ICS_CACHE_DIR", "/tmp/ics")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ICSCacheDir != "/tmp/ics" {
+		t.Errorf("ICSCacheDir = %q, want /tmp/ics", cfg.ICSCacheDir)
+	}
+}
+
+func TestLoadConstraintWorkTimeViolation(t *testing.T) {
+	validEnv(t)
+	// MAX before MIN
+	t.Setenv("START_WORK_MIN", "09:00")
+	t.Setenv("START_WORK_MAX", "08:00")
+	_, err := Load()
+	if err == nil {
+		t.Fatal("expected error for START_WORK_MAX < START_WORK_MIN")
+	}
+	if !strings.Contains(err.Error(), "START_WORK_MAX") {
+		t.Errorf("error should mention START_WORK_MAX, got: %v", err)
+	}
+}
+
+func TestLoadConstraintWorkDurationViolation(t *testing.T) {
+	validEnv(t)
+	t.Setenv("MIN_WORK_DURATION", "9h")
+	t.Setenv("MAX_WORK_DURATION", "8h")
+	_, err := Load()
+	if err == nil {
+		t.Fatal("expected error for MAX_WORK_DURATION < MIN_WORK_DURATION")
+	}
+	if !strings.Contains(err.Error(), "MAX_WORK_DURATION") {
+		t.Errorf("error should mention MAX_WORK_DURATION, got: %v", err)
+	}
+}

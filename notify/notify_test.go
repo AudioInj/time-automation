@@ -1,6 +1,7 @@
 package notify
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -9,7 +10,7 @@ import (
 )
 
 func TestSendEmptyWebhook(t *testing.T) {
-	New("").Send("status", "message") // must not panic
+	New("").Send(context.Background(), "status", "message") // must not panic
 }
 
 func TestSendReachesWebhook(t *testing.T) {
@@ -20,7 +21,7 @@ func TestSendReachesWebhook(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	New(ts.URL).Send("Test", "Hello")
+	New(ts.URL).Send(context.Background(), "Test", "Hello")
 	if !called {
 		t.Error("expected webhook server to receive a request")
 	}
@@ -37,7 +38,7 @@ func TestSendPayloadShape(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	New(ts.URL).Send("MyTitle", "MyMessage")
+	New(ts.URL).Send(context.Background(), "MyTitle", "MyMessage")
 
 	embeds, ok := payload["embeds"].([]interface{})
 	if !ok || len(embeds) != 1 {
@@ -65,7 +66,7 @@ func TestSendContentType(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	New(ts.URL).Send("title", "body")
+	New(ts.URL).Send(context.Background(), "title", "body")
 }
 
 func TestSendLogsOnErrorStatus(t *testing.T) {
@@ -75,5 +76,5 @@ func TestSendLogsOnErrorStatus(t *testing.T) {
 	defer ts.Close()
 
 	// Should not panic; error is only logged
-	New(ts.URL).Send("title", "body")
+	New(ts.URL).Send(context.Background(), "title", "body")
 }
