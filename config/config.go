@@ -33,7 +33,7 @@ type Config struct {
 	Task    string
 	Verbose bool
 	DryRun  bool
-	WebPort string // HTTP port for the status UI, e.g. ":8080"
+	WebPort string // HTTP port for the status UI, e.g. ":8077"
 
 	HolidayAddress  string
 	VacationAddress string
@@ -83,7 +83,7 @@ func Load() (*Config, error) {
 
 	webPort := os.Getenv("WEB_PORT")
 	if webPort == "" {
-		webPort = ":8080"
+		webPort = ":8077"
 	} else if webPort[0] != ':' {
 		webPort = ":" + webPort
 	}

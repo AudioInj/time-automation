@@ -21,7 +21,7 @@ type Server struct {
 	srv   *http.Server
 }
 
-// New creates a Server that listens on addr (e.g. ":8080").
+// New creates a Server that listens on addr (e.g. ":8077").
 func New(cfg config.Config, state *tracker.StateTracker, addr string) *Server {
 	s := &Server{cfg: cfg, state: state}
 	mux := http.NewServeMux()
