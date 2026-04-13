@@ -20,3 +20,8 @@ issues:
   # Show all issues, not just the first few per linter
   max-same-issues: 0
   max-issues-per-linter: 0
+  exclude-rules:
+    # The web package contains intentional German strings in HTML templates and tests.
+    # misspell only knows English and would flag valid German words.
+    - path: ^web/
+      linters: [misspell]
