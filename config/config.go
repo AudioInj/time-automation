@@ -33,6 +33,7 @@ type Config struct {
 	Task    string
 	Verbose bool
 	DryRun  bool
+	WebPort string // HTTP port for the status UI, e.g. ":8080"
 
 	HolidayAddress  string
 	VacationAddress string
@@ -80,6 +81,13 @@ func Load() (*Config, error) {
 		icsDir = filepath.Dir(stateFile)
 	}
 
+	webPort := os.Getenv("WEB_PORT")
+	if webPort == "" {
+		webPort = ":8080"
+	} else if webPort[0] != ':' {
+		webPort = ":" + webPort
+	}
+
 	cfg := &Config{
 		Domain:      os.Getenv("DOMAIN"),
 		Subdomain:   os.Getenv("SUBDOMAIN"),
@@ -104,6 +112,7 @@ func Load() (*Config, error) {
 		Task:    os.Getenv("TASK"),
 		Verbose: os.Getenv("VERBOSE") == "true",
 		DryRun:  os.Getenv("DRY_RUN") == "true",
+		WebPort: webPort,
 
 		HolidayAddress:  os.Getenv("HOLIDAY_ADDRESS"),
 		VacationAddress: os.Getenv("VACATION_ADDRESS"),
