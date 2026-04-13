@@ -152,11 +152,17 @@ func (e *Executor) post(ctx context.Context, status interface{}) {
 		req.Header.Set("Authorization", e.token)
 		req.Header.Set("Content-Type", "application/json")
 		resp, err = e.client.Do(req)
-		if err == nil && resp.StatusCode >= 200 && resp.StatusCode < 300 {
-			break
+		if err != nil {
+			log.Printf("[POST] Attempt %d failed: %v", attempt, err)
+			time.Sleep(e.retrySleep)
+			continue
 		}
-		if err == nil && resp.StatusCode == 401 {
+		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+			break // success: body closed via defer below
+		}
+		if resp.StatusCode == 401 {
 			log.Printf("[POST] Attempt %d: token expired (401), re-authenticating...", attempt)
+			resp.Body.Close()
 			e.token = ""
 			e.token = e.login(ctx)
 			if e.token == "" {
@@ -164,9 +170,9 @@ func (e *Executor) post(ctx context.Context, status interface{}) {
 				return
 			}
 		} else {
-			log.Printf("[POST] Attempt %d failed: %v", attempt, err)
+			log.Printf("[POST] Attempt %d failed: status %s", attempt, resp.Status)
+			resp.Body.Close()
 		}
-
 		time.Sleep(e.retrySleep)
 	}
 	if err != nil || resp == nil || resp.StatusCode < 200 || resp.StatusCode >= 300 {
