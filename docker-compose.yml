@@ -4,7 +4,7 @@ services:
     container_name: time-automation-in-factory
     restart: unless-stopped
     ports:
-      - "${WEB_PORT:-8080}:8080"
+      - "${WEB_PORT:-8077}:8077"
     volumes:
       - time-automation-state:/data
     environment:
@@ -29,7 +29,7 @@ services:
       - VERBOSE=${VERBOSE:-false}
       - DRY_RUN=${DRY_RUN:-false}
       - STATE_FILE=/data/state.json
-      - WEB_PORT=${WEB_PORT:-8080}
+      - WEB_PORT=${WEB_PORT:-8077}
 
 volumes:
   time-automation-state:
