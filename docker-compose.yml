@@ -1,7 +1,7 @@
 services:
   time-automation:
     image: ghcr.io/audioinj/time-automation:latest
-    container_name: time-automation
+    container_name: time-automation-in-factory
     restart: unless-stopped
     volumes:
       - time-automation-state:/data
