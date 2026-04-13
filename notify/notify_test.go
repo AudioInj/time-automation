@@ -30,7 +30,9 @@ func TestSendPayloadShape(t *testing.T) {
 	var payload map[string]interface{}
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
-		json.Unmarshal(body, &payload)
+		if err := json.Unmarshal(body, &payload); err != nil {
+			t.Errorf("failed to unmarshal request body: %v", err)
+		}
 		w.WriteHeader(http.StatusNoContent)
 	}))
 	defer ts.Close()
