@@ -64,10 +64,12 @@ type StateTracker struct {
 }
 
 func New(path string) *StateTracker {
-	return &StateTracker{
+	t := &StateTracker{
 		path: path,
 		data: make(map[string]DayState),
 	}
+	t.loadFile() // load persisted state once at startup
+	return t
 }
 
 func (s *StateTracker) Reset(date string) {
@@ -80,8 +82,6 @@ func (s *StateTracker) Reset(date string) {
 func (s *StateTracker) Load(date string) DayState {
 	s.lock.Lock()
 	defer s.lock.Unlock()
-	s.loadFile()
-
 	if state, ok := s.data[date]; ok {
 		return state
 	}

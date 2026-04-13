@@ -12,10 +12,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/run2go/time-automation/config"
-	"github.com/run2go/time-automation/executor"
-	"github.com/run2go/time-automation/notify"
-	"github.com/run2go/time-automation/tracker"
+	"github.com/audioinj/time-automation/config"
+	"github.com/audioinj/time-automation/executor"
+	"github.com/audioinj/time-automation/notify"
+	"github.com/audioinj/time-automation/tracker"
 )
 
 type Scheduler struct {
@@ -150,55 +150,52 @@ func (s *Scheduler) fetchCalendar(url, cachePath string, useAuth bool) ([]byte, 
 	if url == "" {
 		return nil, nil
 	}
-	var resp *http.Response
-	var err error
-	var data []byte
-
-	if useAuth && url != "" {
-		// Use HTTP Basic Auth for vacation calendar
-		client := &http.Client{}
-		req, errReq := http.NewRequest("GET", url, nil)
-		if errReq != nil {
-			log.Printf("[INIT] Failed to create request for %s: %v", url, errReq)
-			goto fallback
-		}
-		username := s.cfg.Username + "@" + s.cfg.Domain
-		password := s.cfg.Password
-		req.SetBasicAuth(username, password)
-		resp, err = client.Do(req)
-		if err != nil {
-			log.Printf("[INIT] Failed to fetch vacation calendar: %v", err)
-		}
-	} else if url != "" {
-		resp, err = http.Get(url)
-		if err != nil {
-			log.Printf("[INIT] Failed to fetch holiday calendar: %v", err)
-		}
-	} else {
-		goto fallback
-	}
-
-	if err != nil || resp.StatusCode != 200 {
-		log.Printf("[INIT] Failed to fetch calendar from %s, using cache if available", url)
-		goto fallback
-	}
-	defer resp.Body.Close()
-	data, err = io.ReadAll(resp.Body)
+	data, err := s.fetchCalendarRemote(url, cachePath, useAuth)
 	if err == nil {
-		_ = os.WriteFile(cachePath, data, 0644)
-		log.Printf("[INIT] Successfully fetched and cached calendar: %s", url)
-	}
-	return data, err
-
-fallback:
-	// fallback to cached file
-	data, err2 := os.ReadFile(cachePath)
-	if err2 == nil {
-		log.Printf("[INIT] Loaded cached calendar for %s", url)
 		return data, nil
+	}
+	log.Printf("[INIT] Failed to fetch calendar from %s, using cache if available", url)
+	cached, cacheErr := os.ReadFile(cachePath)
+	if cacheErr == nil {
+		log.Printf("[INIT] Loaded cached calendar for %s", url)
+		return cached, nil
 	}
 	log.Printf("[INIT] No calendar available for %s", url)
 	return nil, err
+}
+
+// fetchCalendarRemote performs the actual HTTP request and caches the result on success.
+func (s *Scheduler) fetchCalendarRemote(url, cachePath string, useAuth bool) ([]byte, error) {
+	var resp *http.Response
+	var err error
+
+	if useAuth {
+		req, reqErr := http.NewRequest("GET", url, nil)
+		if reqErr != nil {
+			log.Printf("[INIT] Failed to create request for %s: %v", url, reqErr)
+			return nil, reqErr
+		}
+		req.SetBasicAuth(s.cfg.Username+"@"+s.cfg.Domain, s.cfg.Password)
+		resp, err = (&http.Client{}).Do(req)
+	} else {
+		resp, err = http.Get(url)
+	}
+	if err != nil {
+		log.Printf("[INIT] Failed to fetch calendar from %s: %v", url, err)
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		log.Printf("[INIT] Calendar fetch returned %s for %s", resp.Status, url)
+		return nil, fmt.Errorf("HTTP %s", resp.Status)
+	}
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	_ = os.WriteFile(cachePath, data, 0644)
+	log.Printf("[INIT] Successfully fetched and cached calendar: %s", url)
+	return data, nil
 }
 
 func (s *Scheduler) isTodayHolidayOrVacation(now time.Time) (bool, string, string) {

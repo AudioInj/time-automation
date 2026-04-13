@@ -2,8 +2,9 @@
 package config
 
 import (
-	"log"
+	"fmt"
 	"os"
+	"strings"
 	"time"
 )
 
@@ -19,10 +20,6 @@ type Config struct {
 	StartWorkMax  time.Time
 	StartBreakMin time.Time
 	StartBreakMax time.Time
-	StopBreakMin  time.Time
-	StopBreakMax  time.Time
-	StopWorkMin   time.Time
-	StopWorkMax   time.Time
 
 	MinWorkDuration  time.Duration
 	MaxWorkDuration  time.Duration
@@ -35,18 +32,22 @@ type Config struct {
 	Verbose bool
 	DryRun  bool
 
-	// New fields for holiday/vacation
 	HolidayAddress  string
 	VacationAddress string
 	VacationKeyword string
 }
 
-func Load() *Config {
+// Load reads configuration from environment variables.
+// All validation errors are collected and returned together so the operator
+// sees every misconfigured variable in a single startup message.
+func Load() (*Config, error) {
+	var errs []string
+
 	parseTime := func(key string) time.Time {
 		val := os.Getenv(key)
 		t, err := time.Parse("15:04", val)
 		if err != nil {
-			log.Fatalf("Invalid time format for %s: %s", key, val)
+			errs = append(errs, fmt.Sprintf("  %s: invalid time %q (expected HH:MM)", key, val))
 		}
 		return t
 	}
@@ -55,9 +56,14 @@ func Load() *Config {
 		val := os.Getenv(key)
 		d, err := time.ParseDuration(val)
 		if err != nil {
-			log.Fatalf("Invalid duration for %s: %s", key, val)
+			errs = append(errs, fmt.Sprintf("  %s: invalid duration %q (e.g. 8.5h)", key, val))
 		}
 		return d
+	}
+
+	stateFile := os.Getenv("STATE_FILE")
+	if stateFile == "" {
+		stateFile = "/app/state.json"
 	}
 
 	cfg := &Config{
@@ -66,7 +72,7 @@ func Load() *Config {
 		Username:   os.Getenv("USERNAME"),
 		Password:   os.Getenv("PASSWORD"),
 		WebhookURL: os.Getenv("WEBHOOK_URL"),
-		StateFile:  os.Getenv("STATE_FILE"),
+		StateFile:  stateFile,
 
 		StartWorkMin:  parseTime("START_WORK_MIN"),
 		StartWorkMax:  parseTime("START_WORK_MAX"),
@@ -84,11 +90,13 @@ func Load() *Config {
 		Verbose: os.Getenv("VERBOSE") == "true",
 		DryRun:  os.Getenv("DRY_RUN") == "true",
 
-		// New fields
 		HolidayAddress:  os.Getenv("HOLIDAY_ADDRESS"),
 		VacationAddress: os.Getenv("VACATION_ADDRESS"),
 		VacationKeyword: os.Getenv("VACATION_KEYWORD"),
 	}
 
-	return cfg
+	if len(errs) > 0 {
+		return nil, fmt.Errorf("configuration errors:\n%s", strings.Join(errs, "\n"))
+	}
+	return cfg, nil
 }
