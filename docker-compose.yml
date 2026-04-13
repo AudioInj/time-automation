@@ -4,7 +4,7 @@ services:
     container_name: time-automation-in-factory
     restart: unless-stopped
     ports:
-      - "${WEB_PORT:-8077}:8077"
+      - "${WEB_PORT:-8077}:${WEB_PORT:-8077}"
     volumes:
       - time-automation-state:/data
     environment:
@@ -30,6 +30,18 @@ services:
       - DRY_RUN=${DRY_RUN:-false}
       - STATE_FILE=/data/state.json
       - WEB_PORT=${WEB_PORT:-8077}
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:${WEB_PORT:-8077}/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 15s
+      retries: 3
+    stop_grace_period: 15s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 
 volumes:
   time-automation-state:
