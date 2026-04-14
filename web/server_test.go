@@ -170,9 +170,52 @@ func TestIndexRendersStatusBadges(t *testing.T) {
 
 	body := w.Body.String()
 	// The page must always contain these structural elements
-	for _, want := range []string{"Tagesstatus", "Nettoarbeitszeit", "Tagesplan", "Einstellungen"} {
+	for _, want := range []string{"Tagesstatus", "Nettoarbeitszeit", "Tagesplan", "Einstellungen", "Abwesenheit"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("expected HTML to contain %q", want)
 		}
+	}
+}
+
+func TestActionMarkSick(t *testing.T) {
+	s := makeServer(t)
+	tomorrow := time.Now().AddDate(0, 0, 1).Format("2006-01-02")
+	dayAfter := time.Now().AddDate(0, 0, 2).Format("2006-01-02")
+
+	body := "action=mark_sick&dates=" + tomorrow + "%0A" + dayAfter
+	req := httptest.NewRequest(http.MethodPost, "/api/action", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w := httptest.NewRecorder()
+	s.handleAction(w, req)
+
+	if w.Code != http.StatusSeeOther {
+		t.Errorf("expected 303, got %d", w.Code)
+	}
+	for _, d := range []string{tomorrow, dayAfter} {
+		if st := s.state.Load(d); !st.IsSick {
+			t.Errorf("expected IsSick=true for %s after mark_sick", d)
+		}
+	}
+}
+
+func TestActionUnmarkSick(t *testing.T) {
+	s := makeServer(t)
+	tomorrow := time.Now().AddDate(0, 0, 1).Format("2006-01-02")
+
+	// Pre-mark
+	ds := tracker.DayState{IsSick: true}
+	s.state.Save(tomorrow, ds)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/action",
+		strings.NewReader("action=unmark_sick&date="+tomorrow))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w := httptest.NewRecorder()
+	s.handleAction(w, req)
+
+	if w.Code != http.StatusSeeOther {
+		t.Errorf("expected 303, got %d", w.Code)
+	}
+	if st := s.state.Load(tomorrow); st.IsSick {
+		t.Error("expected IsSick=false after unmark_sick")
 	}
 }

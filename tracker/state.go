@@ -29,6 +29,7 @@ type DayState struct {
 	// Additional flags
 	IsHoliday  bool `json:"is_holiday,omitempty"`
 	IsVacation bool `json:"is_vacation,omitempty"`
+	IsSick     bool `json:"is_sick,omitempty"`
 }
 
 // NetWorkDuration returns the net working time for the day (time before break + time after break).

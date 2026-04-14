@@ -320,6 +320,19 @@ func (s *Scheduler) Run(ctx context.Context) {
 		today := now.Format("2006-01-02")
 		st := s.state.Load(today)
 
+		// Sick day: set explicitly by the user via the web UI
+		if st.IsSick {
+			if s.holidayCheckedDay != now.YearDay() {
+				log.Printf("[SCHEDULER] Sick day (%s), skipping automation", today)
+				s.holidayCheckedDay = now.YearDay()
+				s.holidayCheckedType = "sick"
+				if s.notify != nil {
+					s.notify.Send(ctx, "🤒 Kranktag", today)
+				}
+			}
+			return
+		}
+
 		// Only check and notify if not already marked as holiday/vacation in state and not already checked in memory
 		if !st.IsHoliday && !st.IsVacation && s.holidayCheckedDay != now.YearDay() {
 			if isHoliday, reason, holidayName := s.isTodayHolidayOrVacation(ctx, now); isHoliday {
