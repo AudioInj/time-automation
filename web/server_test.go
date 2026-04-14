@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/audioinj/time-automation/config"
 	"github.com/audioinj/time-automation/tracker"
@@ -21,7 +22,7 @@ func makeServer(t *testing.T) *Server {
 		Username:  "testuser",
 		WorkDays:  "1-5",
 		Task:      "Dev",
-	}, state, ":0")
+	}, state, nil, nil, ":0")
 }
 
 func TestIndexReturns200(t *testing.T) {
@@ -87,7 +88,7 @@ func TestAPIStatusNoPasswordInResponse(t *testing.T) {
 	s := New(config.Config{
 		Password:   "supersecret",
 		WebhookURL: "https://discord.com/api/webhooks/secret",
-	}, state, ":0")
+	}, state, nil, nil, ":0")
 
 	req := httptest.NewRequest(http.MethodGet, "/api/status", nil)
 	w := httptest.NewRecorder()
@@ -99,6 +100,48 @@ func TestAPIStatusNoPasswordInResponse(t *testing.T) {
 	}
 	if strings.Contains(body, "discord.com") {
 		t.Error("webhook URL must not appear in API response")
+	}
+}
+
+func TestActionStartWork(t *testing.T) {
+	s := makeServer(t)
+	today := time.Now().Format("2006-01-02")
+
+	req := httptest.NewRequest(http.MethodPost, "/api/action", strings.NewReader("action=start_work"))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w := httptest.NewRecorder()
+	s.handleAction(w, req)
+
+	if w.Code != http.StatusSeeOther {
+		t.Errorf("expected 303 redirect, got %d", w.Code)
+	}
+	st := s.state.Load(today)
+	if !st.WorkStarted {
+		t.Error("expected WorkStarted=true after start_work action")
+	}
+	if st.WorkStartTime.IsZero() {
+		t.Error("expected WorkStartTime to be set")
+	}
+}
+
+func TestActionRejectsGet(t *testing.T) {
+	s := makeServer(t)
+	req := httptest.NewRequest(http.MethodGet, "/api/action", nil)
+	w := httptest.NewRecorder()
+	s.handleAction(w, req)
+	if w.Code != http.StatusMethodNotAllowed {
+		t.Errorf("expected 405, got %d", w.Code)
+	}
+}
+
+func TestActionUnknown(t *testing.T) {
+	s := makeServer(t)
+	req := httptest.NewRequest(http.MethodPost, "/api/action", strings.NewReader("action=invalid"))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w := httptest.NewRecorder()
+	s.handleAction(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d", w.Code)
 	}
 }
 
@@ -127,9 +170,52 @@ func TestIndexRendersStatusBadges(t *testing.T) {
 
 	body := w.Body.String()
 	// The page must always contain these structural elements
-	for _, want := range []string{"Tagesstatus", "Nettoarbeitszeit", "Tagesplan", "Einstellungen"} {
+	for _, want := range []string{"Tagesstatus", "Nettoarbeitszeit", "Tagesplan", "Einstellungen", "Abwesenheit"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("expected HTML to contain %q", want)
 		}
+	}
+}
+
+func TestActionMarkSick(t *testing.T) {
+	s := makeServer(t)
+	tomorrow := time.Now().AddDate(0, 0, 1).Format("2006-01-02")
+	dayAfter := time.Now().AddDate(0, 0, 2).Format("2006-01-02")
+
+	body := "action=mark_sick&dates=" + tomorrow + "%0A" + dayAfter
+	req := httptest.NewRequest(http.MethodPost, "/api/action", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w := httptest.NewRecorder()
+	s.handleAction(w, req)
+
+	if w.Code != http.StatusSeeOther {
+		t.Errorf("expected 303, got %d", w.Code)
+	}
+	for _, d := range []string{tomorrow, dayAfter} {
+		if st := s.state.Load(d); !st.IsSick {
+			t.Errorf("expected IsSick=true for %s after mark_sick", d)
+		}
+	}
+}
+
+func TestActionUnmarkSick(t *testing.T) {
+	s := makeServer(t)
+	tomorrow := time.Now().AddDate(0, 0, 1).Format("2006-01-02")
+
+	// Pre-mark
+	ds := tracker.DayState{IsSick: true}
+	s.state.Save(tomorrow, ds)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/action",
+		strings.NewReader("action=unmark_sick&date="+tomorrow))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w := httptest.NewRecorder()
+	s.handleAction(w, req)
+
+	if w.Code != http.StatusSeeOther {
+		t.Errorf("expected 303, got %d", w.Code)
+	}
+	if st := s.state.Load(tomorrow); st.IsSick {
+		t.Error("expected IsSick=false after unmark_sick")
 	}
 }

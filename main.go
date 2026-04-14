@@ -31,7 +31,7 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
 
-	webSrv := web.New(*cfg, state, cfg.WebPort)
+	webSrv := web.New(*cfg, state, exec, notifier, cfg.WebPort)
 	go webSrv.Start(ctx)
 
 	log.Println("[START] Time automation running...")

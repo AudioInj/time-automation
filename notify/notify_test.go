@@ -78,3 +78,48 @@ func TestSendLogsOnErrorStatus(t *testing.T) {
 	// Should not panic; error is only logged
 	New(ts.URL).Send(context.Background(), "title", "body")
 }
+
+func TestSendSlackPayloadShape(t *testing.T) {
+	var payload map[string]interface{}
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		if err := json.Unmarshal(body, &payload); err != nil {
+			t.Errorf("failed to unmarshal request body: %v", err)
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer ts.Close()
+
+	// Embed "hooks.slack.com" in the path so the URL-based detection triggers
+	slackURL := ts.URL + "/hooks.slack.com/services/T000/B000/xxxx"
+	New(slackURL).Send(context.Background(), "▶️ Arbeit gestartet", "08:14:23")
+
+	text, ok := payload["text"].(string)
+	if !ok {
+		t.Fatalf("expected 'text' field in Slack payload, got: %v", payload)
+	}
+	if _, hasEmbeds := payload["embeds"]; hasEmbeds {
+		t.Error("Slack payload must not contain 'embeds'")
+	}
+	if text != "*▶️ Arbeit gestartet*\n08:14:23" {
+		t.Errorf("unexpected Slack text: %q", text)
+	}
+}
+
+func TestSendSlackEmptyMessage(t *testing.T) {
+	var payload map[string]interface{}
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(body, &payload)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer ts.Close()
+
+	slackURL := ts.URL + "/hooks.slack.com/services/T000/B000/xxxx"
+	New(slackURL).Send(context.Background(), "Kein Arbeitstag", "")
+
+	text, _ := payload["text"].(string)
+	if text != "*Kein Arbeitstag*" {
+		t.Errorf("expected status only without trailing newline, got: %q", text)
+	}
+}

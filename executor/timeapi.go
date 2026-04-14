@@ -53,7 +53,7 @@ func (e *Executor) login(ctx context.Context) string {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewBuffer(data))
 	if err != nil {
 		msg := "Login failed: " + err.Error()
-		log.Println("[LOGIN] " + msg)
+		log.Printf("[LOGIN] %s", msg)
 		e.notifier.Send(ctx, "Login Failed", msg)
 		return ""
 	}
@@ -61,7 +61,7 @@ func (e *Executor) login(ctx context.Context) string {
 	resp, err := e.client.Do(req)
 	if err != nil {
 		msg := "Login failed: " + err.Error()
-		log.Println("[LOGIN] " + msg)
+		log.Printf("[LOGIN] %s", msg)
 		e.notifier.Send(ctx, "Login Failed", msg)
 		return ""
 	}
@@ -71,14 +71,14 @@ func (e *Executor) login(ctx context.Context) string {
 	if err := json.NewDecoder(resp.Body).Decode(&rawResp); err != nil {
 		log.Println("[LOGIN] Failed to decode response:", err)
 	}
-	rawBytes, _ := json.Marshal(rawResp)
-	log.Println("[LOGIN] Raw response:", string(rawBytes))
-	e.VerboseLog("Login response: " + string(rawBytes))
+	if rawBytes, err := json.Marshal(rawResp); err == nil {
+		e.VerboseLog("Login response: " + string(rawBytes))
+	}
 
 	token, _ := rawResp["token"].(string)
 	if token == "" {
 		msg := "Login failed: no token received"
-		log.Println("[LOGIN] " + msg)
+		log.Printf("[LOGIN] %s", msg)
 		e.notifier.Send(ctx, "Login Failed", msg)
 	} else {
 		log.Println("[LOGIN] Token received successfully")
@@ -87,7 +87,7 @@ func (e *Executor) login(ctx context.Context) string {
 }
 
 func (e *Executor) post(ctx context.Context, status interface{}) {
-	log.Printf("[POST] Preparing to post time entry with status: %v", status)
+	e.VerboseLog(fmt.Sprintf("post: status=%v", status))
 	if e.cfg.DryRun {
 		log.Println("[POST] DRY_RUN enabled: would POST /api/post-time")
 		e.VerboseLog("DRY_RUN enabled: would POST /api/post-time with status: " + toString(status))
@@ -138,7 +138,6 @@ func (e *Executor) post(ctx context.Context, status interface{}) {
 		return
 	}
 	url := fmt.Sprintf("https://%s.%s/api/post-time", e.cfg.Subdomain, e.cfg.Domain)
-	log.Println("[POST] POST", url, "payload:", string(data))
 	e.VerboseLog("POST " + url + " payload: " + string(data))
 
 	var resp *http.Response
@@ -150,7 +149,11 @@ func (e *Executor) post(ctx context.Context, status interface{}) {
 			e.token = e.login(ctx)
 			if e.token == "" {
 				log.Printf("[POST] Login failed on attempt %d, retrying...", attempt)
-				time.Sleep(e.retrySleep)
+				select {
+				case <-time.After(e.retrySleep):
+				case <-ctx.Done():
+					return
+				}
 				continue
 			}
 		}
@@ -161,7 +164,11 @@ func (e *Executor) post(ctx context.Context, status interface{}) {
 		resp, err = e.client.Do(req)
 		if err != nil {
 			log.Printf("[POST] Attempt %d failed: %v", attempt, err)
-			time.Sleep(e.retrySleep)
+			select {
+			case <-time.After(e.retrySleep):
+			case <-ctx.Done():
+				return
+			}
 			continue
 		}
 		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
@@ -180,7 +187,11 @@ func (e *Executor) post(ctx context.Context, status interface{}) {
 			log.Printf("[POST] Attempt %d failed: status %s", attempt, resp.Status)
 			_ = resp.Body.Close()
 		}
-		time.Sleep(e.retrySleep)
+		select {
+		case <-time.After(e.retrySleep):
+		case <-ctx.Done():
+			return
+		}
 	}
 	if err != nil || resp == nil || resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		var msg string
