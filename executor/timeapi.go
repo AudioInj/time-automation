@@ -14,9 +14,12 @@ import (
 	"github.com/audioinj/time-automation/notify"
 )
 
+const tokenTTL = 12 * time.Hour
+
 type Executor struct {
 	cfg        config.Config
 	token      string
+	tokenAt    time.Time
 	notifier   *notify.Notifier
 	client     *http.Client
 	retrySleep time.Duration
@@ -140,14 +143,24 @@ func (e *Executor) post(ctx context.Context, status interface{}) {
 	url := fmt.Sprintf("https://%s.%s/api/post-time", e.cfg.Subdomain, e.cfg.Domain)
 	e.VerboseLog("POST " + url + " payload: " + string(data))
 
+	// Proactively expire token if it's older than the TTL (e.g. cached from a previous day).
+	if e.token != "" && time.Since(e.tokenAt) > tokenTTL {
+		log.Printf("[POST] Token TTL exceeded (%v old), clearing for re-authentication", time.Since(e.tokenAt).Round(time.Minute))
+		e.token = ""
+		e.tokenAt = time.Time{}
+	}
+
 	var resp *http.Response
 	maxRetries := 5
+	retried500 := false
 	for attempt := 1; attempt <= maxRetries; attempt++ {
-		// Re-login if token is missing or was cleared after a 401
+		// Re-login if token is missing or was cleared after a 401/TTL expiry/500
 		if e.token == "" {
 			log.Printf("[POST] No token (attempt %d/%d), logging in...", attempt, maxRetries)
 			e.token = e.login(ctx)
-			if e.token == "" {
+			if e.token != "" {
+				e.tokenAt = time.Now()
+			} else {
 				log.Printf("[POST] Login failed on attempt %d, retrying...", attempt)
 				select {
 				case <-time.After(e.retrySleep):
@@ -175,14 +188,17 @@ func (e *Executor) post(ctx context.Context, status interface{}) {
 			break // success: body closed via defer below
 		}
 		if resp.StatusCode == 401 {
-			log.Printf("[POST] Attempt %d: token expired (401), re-authenticating...", attempt)
+			log.Printf("[POST] Attempt %d: token rejected (401), re-authenticating...", attempt)
 			_ = resp.Body.Close()
 			e.token = ""
-			e.token = e.login(ctx)
-			if e.token == "" {
-				log.Println("[POST] Re-authentication failed, aborting")
-				return
-			}
+			e.tokenAt = time.Time{}
+		} else if resp.StatusCode == 500 && !retried500 {
+			// Server may return 500 (not 401) for expired sessions — try clearing the token once.
+			log.Printf("[POST] Attempt %d: got 500, clearing token and retrying with fresh login...", attempt)
+			_ = resp.Body.Close()
+			e.token = ""
+			e.tokenAt = time.Time{}
+			retried500 = true
 		} else {
 			log.Printf("[POST] Attempt %d failed: status %s", attempt, resp.Status)
 			_ = resp.Body.Close()
