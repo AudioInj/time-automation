@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/audioinj/time-automation/config"
 )
@@ -147,5 +148,77 @@ func TestPostRetryExhaustion(t *testing.T) {
 
 	if postAttempts != 5 {
 		t.Errorf("expected 5 post attempts, got %d", postAttempts)
+	}
+}
+
+func TestTokenTTLTriggersReauth(t *testing.T) {
+	// Seed the executor with a stale token (older than tokenTTL).
+	// The post() function must detect the TTL expiry and re-login before posting.
+	loginCalls := 0
+	transport := roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if strings.Contains(r.URL.Path, "/api/login") {
+			loginCalls++
+			return jsonResp(200, `{"token":"fresh-token"}`), nil
+		}
+		return jsonResp(200, `{}`), nil
+	})
+
+	cfg := config.Config{
+		Domain: "example.com", Subdomain: "time",
+		Username: "u", Password: "p", Task: "work",
+	}
+	ctx := context.Background()
+	e := New(cfg)
+	e.client = &http.Client{Transport: transport}
+	e.retrySleep = 0
+
+	// Pre-seed a stale token that is older than tokenTTL
+	e.token = "stale-token-from-yesterday"
+	e.tokenAt = time.Now().Add(-(tokenTTL + time.Hour))
+
+	e.StartWork(ctx)
+
+	if loginCalls != 1 {
+		t.Errorf("expected 1 login call due to TTL expiry, got %d", loginCalls)
+	}
+}
+
+func TestPost500TriggersReauthOnce(t *testing.T) {
+	// If the server returns 500 (not 401), post() should clear the token and
+	// re-authenticate exactly once, then succeed on the next attempt.
+	loginCalls := 0
+	postAttempts := 0
+	transport := roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if strings.Contains(r.URL.Path, "/api/login") {
+			loginCalls++
+			return jsonResp(200, `{"token":"new-token"}`), nil
+		}
+		postAttempts++
+		if postAttempts == 1 {
+			return jsonResp(500, ``), nil // first post → 500 (expired session)
+		}
+		return jsonResp(200, `{}`), nil // after reauth → success
+	})
+
+	cfg := config.Config{
+		Domain: "example.com", Subdomain: "time",
+		Username: "u", Password: "p", Task: "work",
+	}
+	ctx := context.Background()
+	e := New(cfg)
+	e.client = &http.Client{Transport: transport}
+	e.retrySleep = 0
+
+	// Pre-seed a token so the first POST attempt uses it directly
+	e.token = "cached-token"
+	e.tokenAt = time.Now()
+
+	e.StartWork(ctx)
+
+	if loginCalls != 1 {
+		t.Errorf("expected 1 login call (triggered by first 500), got %d", loginCalls)
+	}
+	if postAttempts != 2 {
+		t.Errorf("expected 2 post attempts (first 500, second success), got %d", postAttempts)
 	}
 }
