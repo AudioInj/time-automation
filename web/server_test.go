@@ -27,7 +27,7 @@ func makeServer(t *testing.T) *Server {
 
 func TestIndexReturns200(t *testing.T) {
 	s := makeServer(t)
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/", nil)
 	w := httptest.NewRecorder()
 	s.handleIndex(w, req)
 
@@ -41,7 +41,7 @@ func TestIndexReturns200(t *testing.T) {
 
 func TestIndexUnknownPathReturns404(t *testing.T) {
 	s := makeServer(t)
-	req := httptest.NewRequest(http.MethodGet, "/unknown", nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/unknown", nil)
 	w := httptest.NewRecorder()
 	s.handleIndex(w, req)
 
@@ -52,7 +52,7 @@ func TestIndexUnknownPathReturns404(t *testing.T) {
 
 func TestAPIStatusReturnsJSON(t *testing.T) {
 	s := makeServer(t)
-	req := httptest.NewRequest(http.MethodGet, "/api/status", nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/status", nil)
 	w := httptest.NewRecorder()
 	s.handleAPIStatus(w, req)
 
@@ -67,7 +67,7 @@ func TestAPIStatusReturnsJSON(t *testing.T) {
 
 func TestAPIStatusContainsConfig(t *testing.T) {
 	s := makeServer(t)
-	req := httptest.NewRequest(http.MethodGet, "/api/status", nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/status", nil)
 	w := httptest.NewRecorder()
 	s.handleAPIStatus(w, req)
 
@@ -90,7 +90,7 @@ func TestAPIStatusNoPasswordInResponse(t *testing.T) {
 		WebhookURL: "https://discord.com/api/webhooks/secret",
 	}, state, nil, nil, ":0")
 
-	req := httptest.NewRequest(http.MethodGet, "/api/status", nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/status", nil)
 	w := httptest.NewRecorder()
 	s.handleAPIStatus(w, req)
 
@@ -107,7 +107,7 @@ func TestActionStartWork(t *testing.T) {
 	s := makeServer(t)
 	today := time.Now().Format("2006-01-02")
 
-	req := httptest.NewRequest(http.MethodPost, "/api/action", strings.NewReader("action=start_work"))
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/action", strings.NewReader("action=start_work"))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	w := httptest.NewRecorder()
 	s.handleAction(w, req)
@@ -126,7 +126,7 @@ func TestActionStartWork(t *testing.T) {
 
 func TestActionRejectsGet(t *testing.T) {
 	s := makeServer(t)
-	req := httptest.NewRequest(http.MethodGet, "/api/action", nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/action", nil)
 	w := httptest.NewRecorder()
 	s.handleAction(w, req)
 	if w.Code != http.StatusMethodNotAllowed {
@@ -136,7 +136,7 @@ func TestActionRejectsGet(t *testing.T) {
 
 func TestActionUnknown(t *testing.T) {
 	s := makeServer(t)
-	req := httptest.NewRequest(http.MethodPost, "/api/action", strings.NewReader("action=invalid"))
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/action", strings.NewReader("action=invalid"))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	w := httptest.NewRecorder()
 	s.handleAction(w, req)
@@ -147,7 +147,7 @@ func TestActionUnknown(t *testing.T) {
 
 func TestHealthEndpoint(t *testing.T) {
 	s := makeServer(t)
-	req := httptest.NewRequest(http.MethodGet, "/health", nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/health", nil)
 	w := httptest.NewRecorder()
 	s.handleHealth(w, req)
 
@@ -164,7 +164,7 @@ func TestHealthEndpoint(t *testing.T) {
 
 func TestIndexRendersStatusBadges(t *testing.T) {
 	s := makeServer(t)
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/", nil)
 	w := httptest.NewRecorder()
 	s.handleIndex(w, req)
 
@@ -183,7 +183,7 @@ func TestActionMarkSick(t *testing.T) {
 	dayAfter := time.Now().AddDate(0, 0, 2).Format("2006-01-02")
 
 	body := "action=mark_sick&dates=" + tomorrow + "%0A" + dayAfter
-	req := httptest.NewRequest(http.MethodPost, "/api/action", strings.NewReader(body))
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/action", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	w := httptest.NewRecorder()
 	s.handleAction(w, req)
@@ -206,7 +206,7 @@ func TestActionUnmarkSick(t *testing.T) {
 	ds := tracker.DayState{IsSick: true}
 	s.state.Save(tomorrow, ds)
 
-	req := httptest.NewRequest(http.MethodPost, "/api/action",
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/action",
 		strings.NewReader("action=unmark_sick&date="+tomorrow))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	w := httptest.NewRecorder()
