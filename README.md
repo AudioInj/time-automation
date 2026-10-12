@@ -129,10 +129,26 @@ START_WORK → START_BREAK → STOP_BREAK → STOP_WORK
 | `ci.yml` | Push (non-main) / PR | Tests with race detector, coverage report, golangci-lint, govulncheck, Docker build check on PRs |
 | `docker-build.yml` | Push to `main` | Builds and pushes `:latest` + `:sha-<commit>` to `ghcr.io/audioinj/time-automation` |
 | `release.yml` | Push of `v*.*.*` tag | Builds and pushes semver-tagged image (`1.2.3`, `1.2`, `1`), creates GitHub Release with auto-generated notes |
+| `renovate.yml` | Monday 05:00 UTC / config push / manual | Updates Go, Docker images and GitHub Actions; supports dry runs |
 
-No additional secrets required — all workflows use the built-in `GITHUB_TOKEN`.
+Build and release workflows use the built-in `GITHUB_TOKEN`.
 
-PRs are automatically squash-merged once all CI checks pass.
+### Dependency updates
+
+Renovate replaces Dependabot version updates and follows the Paperless/calibre policy:
+
+- Weekly updates before 08:00 on Monday, Europe/Berlin.
+- Minor and patch updates are grouped and automatically merged after CI passes.
+- Major updates require approval in the Dependency Dashboard before a PR is created, and must then be merged manually.
+- Security alerts can be processed at any time when Renovate runs.
+
+Add an Actions repository secret named `RENOVATE_TOKEN` with a fine-grained PAT that can access this repository. It needs **Contents**, **Pull requests**, **Issues** and **Workflows** read/write permissions, plus **Dependabot alerts** read permission for security updates. A token stored in another repository is not automatically available here.
+
+Renovate performs merges itself after successful checks (`platformAutomerge: false`), so GitHub's **Allow auto-merge** setting is not required. A later Renovate run merges eligible PRs once CI has finished; the workflow can also be started manually.
+
+The workflow fails with a clear message if the secret is missing. It deliberately requires the PAT because PRs created with `GITHUB_TOKEN` do not trigger CI. To verify the setup, run **Actions → Renovate → Run workflow** with **dryRun** enabled; run again without dry-run to process updates within the configured schedule.
+
+Other PRs are automatically squash-merged once all CI checks pass. Renovate PRs use Renovate's update-specific automerge policy.
 
 ## Development
 

@@ -1,0 +1,60 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended",
+    ":dependencyDashboard"
+  ],
+  "timezone": "Europe/Berlin",
+  "schedule": [
+    "before 8am on monday"
+  ],
+  "semanticCommits": "disabled",
+  "commitMessagePrefix": "deps:",
+  "platformAutomerge": false,
+  "gitAuthor": "Renovate Bot <180746461+AudioInj@users.noreply.github.com>",
+  "packageRules": [
+    {
+      "description": "Go-Version in go.mod zusammen mit den übrigen Abhängigkeiten aktualisieren",
+      "matchManagers": [
+        "gomod"
+      ],
+      "matchDepTypes": [
+        "golang"
+      ],
+      "rangeStrategy": "bump"
+    },
+    {
+      "description": "GitHub Actions: CI-Prefix statt deps:",
+      "matchManagers": [
+        "github-actions"
+      ],
+      "commitMessagePrefix": "ci:"
+    },
+    {
+      "description": "Minor + Patch: gruppiert und automatisch gemergt",
+      "matchUpdateTypes": [
+        "minor",
+        "patch"
+      ],
+      "groupName": "alle nicht-major Updates",
+      "automerge": true
+    },
+    {
+      "description": "Major: kein Automerge, manuelle Freigabe via Dependency Dashboard",
+      "matchUpdateTypes": [
+        "major"
+      ],
+      "automerge": false,
+      "dependencyDashboardApproval": true
+    }
+  ],
+  "vulnerabilityAlerts": {
+    "schedule": [
+      "at any time"
+    ],
+    "labels": [
+      "security"
+    ],
+    "dependencyDashboardApproval": false
+  }
+}
