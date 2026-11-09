@@ -3,6 +3,7 @@ package config
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -11,13 +12,16 @@ import (
 )
 
 type Config struct {
-	Domain      string
-	Subdomain   string
-	Username    string
-	Password    string
-	WebhookURL  string
-	StateFile   string
-	ICSCacheDir string
+	AuthOrigin         string
+	BrowserHelper      string
+	BrowserSessionFile string
+	Domain             string
+	Subdomain          string
+	Username           string
+	Password           string
+	WebhookURL         string
+	StateFile          string
+	ICSCacheDir        string
 
 	StartWorkMin  time.Time
 	StartWorkMax  time.Time
@@ -112,13 +116,16 @@ func Load() (*Config, error) {
 	}
 
 	cfg := &Config{
-		Domain:      os.Getenv("DOMAIN"),
-		Subdomain:   os.Getenv("SUBDOMAIN"),
-		Username:    os.Getenv("USERNAME"),
-		Password:    os.Getenv("PASSWORD"),
-		WebhookURL:  os.Getenv("WEBHOOK_URL"),
-		StateFile:   stateFile,
-		ICSCacheDir: icsDir,
+		AuthOrigin:         os.Getenv("AUTH_ORIGIN"),
+		BrowserHelper:      os.Getenv("BROWSER_HELPER"),
+		BrowserSessionFile: os.Getenv("BROWSER_SESSION_FILE"),
+		Domain:             os.Getenv("DOMAIN"),
+		Subdomain:          os.Getenv("SUBDOMAIN"),
+		Username:           os.Getenv("USERNAME"),
+		Password:           os.Getenv("PASSWORD"),
+		WebhookURL:         os.Getenv("WEBHOOK_URL"),
+		StateFile:          stateFile,
+		ICSCacheDir:        icsDir,
 
 		StartWorkMin:  parseTime("START_WORK_MIN"),
 		StartWorkMax:  parseTime("START_WORK_MAX"),
@@ -140,6 +147,13 @@ func Load() (*Config, error) {
 		HolidayAddress:  os.Getenv("HOLIDAY_ADDRESS"),
 		VacationAddress: os.Getenv("VACATION_ADDRESS"),
 		VacationKeyword: os.Getenv("VACATION_KEYWORD"),
+	}
+
+	if cfg.AuthOrigin != "" {
+		u, err := url.Parse(cfg.AuthOrigin)
+		if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || u.Path != "" || u.RawQuery != "" || u.Fragment != "" {
+			errs = append(errs, "  AUTH_ORIGIN: must be an HTTPS origin without path or credentials")
+		}
 	}
 
 	// WorkDays format validation

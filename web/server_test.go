@@ -1,7 +1,9 @@
 package web
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -217,5 +219,26 @@ func TestActionUnmarkSick(t *testing.T) {
 	}
 	if st := s.state.Load(tomorrow); st.IsSick {
 		t.Error("expected IsSick=false after unmark_sick")
+	}
+}
+
+type failingExecutor struct{}
+
+func (failingExecutor) StartWork(context.Context) error  { return fmt.Errorf("offline") }
+func (failingExecutor) StopWork(context.Context) error   { return fmt.Errorf("offline") }
+func (failingExecutor) StartBreak(context.Context) error { return fmt.Errorf("offline") }
+func (failingExecutor) StopBreak(context.Context) error  { return fmt.Errorf("offline") }
+func TestFailedManualBookingDoesNotAdvanceState(t *testing.T) {
+	s := makeServer(t)
+	s.exec = failingExecutor{}
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/action", strings.NewReader("action=start_work"))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w := httptest.NewRecorder()
+	s.handleAction(w, req)
+	if w.Code != http.StatusBadGateway {
+		t.Fatalf("status %d", w.Code)
+	}
+	if s.state.Load(time.Now().Format("2006-01-02")).WorkStarted {
+		t.Fatal("failed booking recorded")
 	}
 }

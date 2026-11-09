@@ -32,6 +32,17 @@ jobs:
           go-version-file: go.mod
           cache: false
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Browser authentication integration tests
+        run: |
+          npm --prefix browser ci
+          cd browser
+          npx playwright install --with-deps chromium
+          npm test
+
       - name: Run tests with race detector
         run: go test -race -coverprofile=coverage.out -covermode=atomic ./...
 
@@ -117,3 +128,4 @@ jobs:
         run: |
           gh pr merge --auto --squash ${{ github.event.pull_request.number }} \
             --repo ${{ github.repository }}
+

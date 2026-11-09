@@ -1,6 +1,6 @@
 # Time-Automation
 
-A lightweight Go application, packaged in an Alpine-based Docker image, for automating time-tracking workflows through API calls.
+A Go scheduler with a Playwright/Chromium authentication helper, packaged in a Docker image, for automating time-tracking workflows through API calls.
 
 It randomly schedules work and break start/stop actions within configurable time windows, skips holidays and vacation days via ICS calendar integration, persists state across restarts, sends Discord webhook notifications, and exposes a web status UI.
 
@@ -10,12 +10,12 @@ It randomly schedules work and break start/stop actions within configurable time
 - Enforces minimum and maximum durations for work and break
 - ICS calendar integration to skip public holidays and vacation days
 - Persists daily state to JSON — restarts never re-trigger already-completed actions
-- Retries API calls up to 5 times; automatically re-authenticates on expired tokens (401)
+- Authentik browser login, persisted sessions, CSRF protection and idempotent booking retries
 - Discord webhook notifications for planned times, errors, and day-off events
 - Web status UI at `http://<host>:8077` — shows today's status, timeline, and configuration
 - Graceful shutdown on `SIGTERM` / `SIGINT`; panic recovery keeps the service alive
 - Dry-run mode for testing without making actual API calls
-- Zero external dependencies — pure Go standard library
+- Go standard library scheduler plus Node.js, Playwright and Chromium
 
 ## Deployment
 
@@ -119,7 +119,7 @@ START_WORK → START_BREAK → STOP_BREAK → STOP_WORK
 2. **Holiday/vacation check** — ICS calendars are fetched once per day and cached in `ICS_CACHE_DIR`. If today matches a holiday or vacation event the scheduler skips all actions and sends a notification.
 3. **Action gating** — Each action fires exactly once; the persisted state prevents re-triggering on restart.
 4. **Duration guards** — Work stop is held back until `MIN_WORK_DURATION` has elapsed. Break stop is held back until `MIN_BREAK_DURATION` has elapsed.
-5. **Token refresh** — If the API returns 401, the cached token is discarded and a fresh login is attempted before retrying.
+5. **Session renewal** — Expired web sessions trigger a new Authentik browser login. Every write uses the session CSRF token and a stable per-user/day/action idempotency key. Failed actions remain pending, with a one-minute retry cooldown.
 6. **Context propagation** — The shutdown context is passed to all HTTP requests, so in-flight calls are cancelled immediately on `SIGTERM`.
 
 ## CI / CD
@@ -158,10 +158,64 @@ go vet ./...          # static analysis
 go build ./...        # compile
 ```
 
-Test coverage includes: scheduler state machine (`Run`), ICS parsing, state persistence and corruption handling, executor login/retry logic (token caching, 401 re-auth, retry exhaustion), Discord webhook payload, and config validation.
+Test coverage includes: scheduler state machine (`Run`), ICS parsing, state persistence and corruption handling, executor error propagation and idempotency keys, Discord webhook payload, and config validation.
 
 Linting is configured in `.golangci.yml` (bodyclose, errcheck, staticcheck, noctx, and more). Run locally with:
 
 ```bash
 golangci-lint run
 ```
+
+
+## Authentik browser authentication
+
+The updated time service uses OIDC web sessions, not the former `/api/login` token.
+Set `DOMAIN=in-factory.com`, `SUBDOMAIN=time`, `AUTH_ORIGIN=https://auth.in-factory.com`,
+and the existing `USERNAME`/`PASSWORD` in your deployment secrets/environment.
+`AUTH_ORIGIN` must be the exact HTTPS origin without a trailing slash; when unset
+it defaults to `https://auth.${DOMAIN}`. The configured username must match the
+service's normalized `preferred_username`. No MFA or interactive consent is supported.
+
+The helper handles Authentik username/password forms (including separate stages and
+open shadow roots), stores cookies beside `STATE_FILE` as `browser-session.json`,
+and reads `/api/session` for identity and CSRF before booking. Credentials travel
+through subprocess stdin, never command arguments. Session files are written
+atomically with mode 0600; protect the persistent volume and its backups as secrets.
+Only the configured service and Authentik origins are allowed for browser requests.
+Other identity providers, CAPTCHA, external assets or customized login forms may
+require adapting the helper. Login failures are bounded and never logged with secrets.
+
+Build and deploy a new image; an existing `latest` image will not contain these changes.
+The Compose volume persists the browser session across restarts. To verify login
+without making a time booking, run in the newly built container:
+
+```sh
+docker compose run --rm --no-deps time-automation ./time-automation -check-auth
+```
+
+Stop the running scheduler before this check so two processes do not share a session
+file. `-check-auth` intentionally performs authentication even with `DRY_RUN=true`.
+Normal dry runs make no browser or API calls.
+
+Bookings keep the existing status values and task text; the server determines the
+user from the session. The helper sends `X-CSRF-Token` and `Idempotency-Key`, rejects
+redirects/HTML/unknown success bodies, and renews expired sessions. Retries reuse the
+same key across process restarts and manual/scheduled actions for the same local day.
+Only one instance may use a state volume. Resetting a day does not create new operation
+keys; it must not be used to book an additional work/break cycle on that day. The server
+retains receipts for 30 days. Avoid changing TASK during an unresolved booking because
+the server rejects different payloads under the same key.
+
+For a local build, install Node.js and the locked browser dependency in addition to Go:
+
+```sh
+npm --prefix browser ci
+cd browser && npx playwright install --with-deps chromium && cd ..
+go build -o time-automation .
+npm --prefix browser test
+```
+
+Run from the repository root, or set `BROWSER_HELPER` to the absolute `client.mjs` path.
+`BROWSER_SESSION_FILE` overrides the session location; `CHROMIUM_PATH` selects an
+installed Chromium (used by Docker). Browser tests use a disposable local HTTPS
+fixture with synthetic credentials, not the production identity provider.
