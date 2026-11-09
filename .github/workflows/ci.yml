@@ -115,7 +115,7 @@ jobs:
     name: Auto-merge
     needs: [test, lint, vuln, docker-check]
     # Renovate controls its own automerge; major updates stay manual.
-    if: github.event_name == 'pull_request' && !startsWith(github.head_ref, 'renovate/')
+    if: github.event_name == 'pull_request' && !github.event.pull_request.draft && !startsWith(github.head_ref, 'renovate/')
     runs-on: ubuntu-latest
     permissions:
       contents: write
