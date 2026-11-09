@@ -22,7 +22,8 @@ permissions:
 jobs:
   test:
     name: Test
-    runs-on: ubuntu-latest
+    # Playwright 1.58.2 supports Ubuntu 24.04, not the moving ubuntu-latest image.
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
@@ -31,6 +32,17 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Browser authentication integration tests
+        run: |
+          npm --prefix browser ci
+          cd browser
+          npx playwright install --with-deps chromium
+          npm test
 
       - name: Run tests with race detector
         run: go test -race -coverprofile=coverage.out -covermode=atomic ./...
@@ -103,7 +115,7 @@ jobs:
     name: Auto-merge
     needs: [test, lint, vuln, docker-check]
     # Renovate controls its own automerge; major updates stay manual.
-    if: github.event_name == 'pull_request' && !startsWith(github.head_ref, 'renovate/')
+    if: github.event_name == 'pull_request' && !github.event.pull_request.draft && !startsWith(github.head_ref, 'renovate/')
     runs-on: ubuntu-latest
     permissions:
       contents: write

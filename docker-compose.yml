@@ -12,6 +12,8 @@ services:
       - SUBDOMAIN=${SUBDOMAIN}
       - USERNAME=${USERNAME}
       - PASSWORD=${PASSWORD}
+      - AUTH_ORIGIN=${AUTH_ORIGIN:-https://auth.in-factory.com}
+      - BROWSER_SESSION_FILE=/data/browser-session.json
       - WEBHOOK_URL=${WEBHOOK_URL:-}
       - WORK_DAYS=${WORK_DAYS:-1-5}
       - START_WORK_MIN=${START_WORK_MIN:-7:30}
@@ -45,3 +47,4 @@ services:
 
 volumes:
   time-automation-state:
+

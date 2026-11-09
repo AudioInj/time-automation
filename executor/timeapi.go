@@ -1,37 +1,34 @@
-// executor/timeapi.go
 package executor
 
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
-	"net/http"
+	"os/exec"
+	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/audioinj/time-automation/config"
 	"github.com/audioinj/time-automation/notify"
 )
 
-const tokenTTL = 12 * time.Hour
-
+// One browser operation at a time also protects the persisted cookie jar.
 type Executor struct {
-	cfg        config.Config
-	token      string
-	tokenAt    time.Time
-	notifier   *notify.Notifier
-	client     *http.Client
-	retrySleep time.Duration
+	cfg         config.Config
+	mu          sync.Mutex
+	nextAttempt time.Time
+	run         func(context.Context, []byte) error
 }
 
 func New(cfg config.Config) *Executor {
-	return &Executor{
-		cfg:        cfg,
-		notifier:   notify.New(cfg.WebhookURL),
-		client:     &http.Client{Timeout: 30 * time.Second},
-		retrySleep: time.Second,
-	}
+	e := &Executor{cfg: cfg}
+	e.run = e.runBrowser
+	return e
 }
 
 func (e *Executor) VerboseLog(msg string) {
@@ -40,202 +37,74 @@ func (e *Executor) VerboseLog(msg string) {
 	}
 }
 
-func (e *Executor) login(ctx context.Context) string {
-	payload := map[string]string{
-		"username": e.cfg.Username,
-		"password": e.cfg.Password,
+func (e *Executor) runBrowser(ctx context.Context, input []byte) error {
+	ctx, cancel := context.WithTimeout(ctx, 120*time.Second)
+	defer cancel()
+	helper := e.cfg.BrowserHelper
+	if helper == "" {
+		helper = "browser/client.mjs"
 	}
-	data, err := json.Marshal(payload)
-	if err != nil {
-		log.Printf("[LOGIN] Failed to marshal payload: %v", err)
-		return ""
+	cmd := exec.CommandContext(ctx, "node", helper)
+	cmd.Stdin = bytes.NewReader(input)
+	// Do not forward browser diagnostics: they can contain URLs, cookies or credentials.
+	var output bytes.Buffer
+	cmd.Stdout = &output
+	if err := cmd.Run(); err != nil {
+		return errors.New("browser helper failed; check SSO credentials, connectivity and browser installation")
 	}
-	url := fmt.Sprintf("https://%s.%s/api/login", e.cfg.Subdomain, e.cfg.Domain)
-	log.Println("[LOGIN] Attempting login at:", url)
-	e.VerboseLog("POST " + url)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewBuffer(data))
-	if err != nil {
-		msg := "Login failed: " + err.Error()
-		log.Printf("[LOGIN] %s", msg)
-		e.notifier.Send(ctx, "Login Failed", msg)
-		return ""
+	var result struct {
+		OK bool `json:"ok"`
 	}
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := e.client.Do(req)
-	if err != nil {
-		msg := "Login failed: " + err.Error()
-		log.Printf("[LOGIN] %s", msg)
-		e.notifier.Send(ctx, "Login Failed", msg)
-		return ""
+	if err := json.Unmarshal(output.Bytes(), &result); err != nil || !result.OK {
+		return errors.New("browser operation was not confirmed")
 	}
-	defer resp.Body.Close() //nolint:errcheck
-
-	var rawResp map[string]interface{}
-	if err := json.NewDecoder(resp.Body).Decode(&rawResp); err != nil {
-		log.Println("[LOGIN] Failed to decode response:", err)
-	}
-	if rawBytes, err := json.Marshal(rawResp); err == nil {
-		e.VerboseLog("Login response: " + string(rawBytes))
-	}
-
-	token, _ := rawResp["token"].(string)
-	if token == "" {
-		msg := "Login failed: no token received"
-		log.Printf("[LOGIN] %s", msg)
-		e.notifier.Send(ctx, "Login Failed", msg)
-	} else {
-		log.Println("[LOGIN] Token received successfully")
-	}
-	return token
+	return nil
 }
 
-func (e *Executor) post(ctx context.Context, status interface{}) {
-	e.VerboseLog(fmt.Sprintf("post: status=%v", status))
-	if e.cfg.DryRun {
-		log.Println("[POST] DRY_RUN enabled: would POST /api/post-time")
-		e.VerboseLog("DRY_RUN enabled: would POST /api/post-time with status: " + toString(status))
-		e.VerboseLog("Payload: " + toString(map[string]interface{}{
-			"status":     status,
-			"inputValue": e.cfg.Task,
-			"userid":     e.cfg.Username,
-		}))
-		return
+func (e *Executor) perform(ctx context.Context, action string, status interface{}) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.cfg.DryRun && action != "check" {
+		log.Printf("[POST] DRY_RUN: %s", action)
+		return nil
 	}
-
-	var payload map[string]interface{}
+	if time.Now().Before(e.nextAttempt) {
+		return errors.New("authentication/API retry cooldown active")
+	}
+	origin := fmt.Sprintf("https://%s.%s", e.cfg.Subdomain, e.cfg.Domain)
+	authOrigin := e.cfg.AuthOrigin
+	if authOrigin == "" {
+		authOrigin = "https://auth." + e.cfg.Domain
+	}
+	sessionFile := e.cfg.BrowserSessionFile
+	if sessionFile == "" {
+		sessionFile = filepath.Join(filepath.Dir(e.cfg.StateFile), "browser-session.json")
+	}
+	// The scheduler supports one action of each kind per local calendar day.
+	// Stable across crashes, manual/scheduled execution and uncertain responses.
+	key := fmt.Sprintf("%x", sha256.Sum256([]byte(origin+"|"+e.cfg.Username+"|"+time.Now().Format("2006-01-02")+"|"+action)))
 	task := e.cfg.Task
-
-	// Bash logic: for break stop (status == true), override task
 	if status == true {
 		task = "Pauseneintrag - Status: Pause auto"
 	}
-
-	// Bash logic: status is string for work, bool for break
-	switch v := status.(type) {
-	case string:
-		// "Start" or "Stop" for work
-		payload = map[string]interface{}{
-			"status":     v,
-			"inputValue": task,
-			"userid":     e.cfg.Username,
-		}
-	case bool:
-		// true/false for break
-		payload = map[string]interface{}{
-			"status":     v,
-			"inputValue": task,
-			"userid":     e.cfg.Username,
-		}
-	default:
-		// fallback
-		payload = map[string]interface{}{
-			"status":     status,
-			"inputValue": task,
-			"userid":     e.cfg.Username,
-		}
-	}
-
-	data, err := json.Marshal(payload)
+	input, err := json.Marshal(map[string]interface{}{
+		"origin": origin, "authOrigin": authOrigin, "username": e.cfg.Username, "password": e.cfg.Password,
+		"sessionFile": sessionFile, "action": action, "status": status, "task": task, "key": key,
+	})
 	if err != nil {
-		log.Printf("[POST] Failed to marshal payload: %v", err)
-		return
+		return err
 	}
-	url := fmt.Sprintf("https://%s.%s/api/post-time", e.cfg.Subdomain, e.cfg.Domain)
-	e.VerboseLog("POST " + url + " payload: " + string(data))
-
-	// Proactively expire token if it's older than the TTL (e.g. cached from a previous day).
-	if e.token != "" && time.Since(e.tokenAt) > tokenTTL {
-		log.Printf("[POST] Token TTL exceeded (%v old), clearing for re-authentication", time.Since(e.tokenAt).Round(time.Minute))
-		e.token = ""
-		e.tokenAt = time.Time{}
+	if err := e.run(ctx, input); err != nil {
+		e.nextAttempt = time.Now().Add(time.Minute)
+		notify.New(e.cfg.WebhookURL).Send(ctx, "Time booking failed", "SSO/API operation failed; local booking remains pending.")
+		return err
 	}
-
-	var resp *http.Response
-	maxRetries := 5
-	retried500 := false
-	for attempt := 1; attempt <= maxRetries; attempt++ {
-		// Re-login if token is missing or was cleared after a 401/TTL expiry/500
-		if e.token == "" {
-			log.Printf("[POST] No token (attempt %d/%d), logging in...", attempt, maxRetries)
-			e.token = e.login(ctx)
-			if e.token != "" {
-				e.tokenAt = time.Now()
-			} else {
-				log.Printf("[POST] Login failed on attempt %d, retrying...", attempt)
-				select {
-				case <-time.After(e.retrySleep):
-				case <-ctx.Done():
-					return
-				}
-				continue
-			}
-		}
-
-		req, _ := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewBuffer(data))
-		req.Header.Set("Authorization", e.token)
-		req.Header.Set("Content-Type", "application/json")
-		resp, err = e.client.Do(req)
-		if err != nil {
-			log.Printf("[POST] Attempt %d failed: %v", attempt, err)
-			select {
-			case <-time.After(e.retrySleep):
-			case <-ctx.Done():
-				return
-			}
-			continue
-		}
-		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-			break // success: body closed via defer below
-		}
-		if resp.StatusCode == 401 {
-			log.Printf("[POST] Attempt %d: token rejected (401), re-authenticating...", attempt)
-			_ = resp.Body.Close()
-			e.token = ""
-			e.tokenAt = time.Time{}
-		} else if resp.StatusCode == 500 && !retried500 {
-			// Server may return 500 (not 401) for expired sessions — try clearing the token once.
-			log.Printf("[POST] Attempt %d: got 500, clearing token and retrying with fresh login...", attempt)
-			_ = resp.Body.Close()
-			e.token = ""
-			e.tokenAt = time.Time{}
-			retried500 = true
-		} else {
-			log.Printf("[POST] Attempt %d failed: status %s", attempt, resp.Status)
-			_ = resp.Body.Close()
-		}
-		select {
-		case <-time.After(e.retrySleep):
-		case <-ctx.Done():
-			return
-		}
-	}
-	if err != nil || resp == nil || resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		var msg string
-		if err != nil {
-			msg = "Failed to post after 5 attempts: " + err.Error()
-		} else if resp != nil {
-			msg = "Failed to post after 5 attempts: HTTP status " + resp.Status
-		} else {
-			msg = "Failed to post after 5 attempts: unknown error"
-		}
-		log.Println("[POST] " + msg)
-		e.notifier.Send(ctx, "Post Failed @here", msg)
-		return
-	}
-	defer resp.Body.Close() //nolint:errcheck
-	log.Printf("[POST] Posted status: %v", status)
-	e.VerboseLog("Posted status: " + toString(status))
+	e.nextAttempt = time.Time{}
+	return nil
 }
 
-func toString(v interface{}) string {
-	b, err := json.Marshal(v)
-	if err != nil {
-		return ""
-	}
-	return string(b)
-}
-
-func (e *Executor) StartWork(ctx context.Context)  { e.post(ctx, "Start") }
-func (e *Executor) StopWork(ctx context.Context)   { e.post(ctx, "Stop") }
-func (e *Executor) StartBreak(ctx context.Context) { e.post(ctx, false) }
-func (e *Executor) StopBreak(ctx context.Context)  { e.post(ctx, true) }
+func (e *Executor) CheckAuth(ctx context.Context) error  { return e.perform(ctx, "check", nil) }
+func (e *Executor) StartWork(ctx context.Context) error  { return e.perform(ctx, "start_work", "Start") }
+func (e *Executor) StopWork(ctx context.Context) error   { return e.perform(ctx, "stop_work", "Stop") }
+func (e *Executor) StartBreak(ctx context.Context) error { return e.perform(ctx, "start_break", false) }
+func (e *Executor) StopBreak(ctx context.Context) error  { return e.perform(ctx, "stop_break", true) }

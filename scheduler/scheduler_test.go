@@ -18,7 +18,7 @@ import (
 
 func TestIsWorkDay(t *testing.T) {
 	// time.Weekday: Sunday=0, Monday=1, ..., Saturday=6
-	monday := time.Date(2024, 1, 8, 9, 0, 0, 0, time.UTC)    // 1
+	monday := time.Date(2024, 1, 8, 9, 0, 0, 0, time.UTC)     // 1
 	wednesday := time.Date(2024, 1, 10, 9, 0, 0, 0, time.UTC) // 3
 	saturday := time.Date(2024, 1, 13, 9, 0, 0, 0, time.UTC)  // 6
 	sunday := time.Date(2024, 1, 7, 9, 0, 0, 0, time.UTC)     // 0
@@ -334,5 +334,16 @@ func TestRunNonWorkDay(t *testing.T) {
 	if !isWorkDay("1-5", sunday) {
 		// Direct unit check
 		t.Log("confirmed: Sunday not in 1-5")
+	}
+}
+
+func TestFailedBookingDoesNotAdvanceState(t *testing.T) {
+	sched, state := makeTestScheduler(t)
+	now := time.Now()
+	setFixedPastTimes(sched, now)
+	sched.executor = executor.New(config.Config{BrowserHelper: "/nonexistent/helper.mjs"})
+	sched.Run(t.Context())
+	if state.Load(now.Format("2006-01-02")).WorkStarted {
+		t.Fatal("failed booking recorded as successful")
 	}
 }

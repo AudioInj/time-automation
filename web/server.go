@@ -19,10 +19,10 @@ import (
 
 // Executor is the minimal interface the web server needs to fire manual actions.
 type Executor interface {
-	StartWork(ctx context.Context)
-	StopWork(ctx context.Context)
-	StartBreak(ctx context.Context)
-	StopBreak(ctx context.Context)
+	StartWork(ctx context.Context) error
+	StopWork(ctx context.Context) error
+	StartBreak(ctx context.Context) error
+	StopBreak(ctx context.Context) error
 }
 
 // Server serves the status web UI.
@@ -46,7 +46,7 @@ func New(cfg config.Config, state *tracker.StateTracker, exec Executor, notifier
 		Addr:         addr,
 		Handler:      mux,
 		ReadTimeout:  5 * time.Second,
-		WriteTimeout: 10 * time.Second,
+		WriteTimeout: 150 * time.Second,
 		IdleTimeout:  60 * time.Second,
 	}
 	return s
@@ -321,7 +321,10 @@ func (s *Server) handleAction(w http.ResponseWriter, r *http.Request) {
 	case "start_work":
 		if !st.WorkStarted {
 			if s.exec != nil {
-				s.exec.StartWork(r.Context())
+				if err := s.exec.StartWork(r.Context()); err != nil {
+					http.Error(w, "Buchung fehlgeschlagen; Status wurde nicht geändert", http.StatusBadGateway)
+					return
+				}
 			}
 			st.WorkStarted = true
 			st.WorkStartTime = now
@@ -334,7 +337,10 @@ func (s *Server) handleAction(w http.ResponseWriter, r *http.Request) {
 	case "stop_work":
 		if st.WorkStarted && !st.WorkStopped {
 			if s.exec != nil {
-				s.exec.StopWork(r.Context())
+				if err := s.exec.StopWork(r.Context()); err != nil {
+					http.Error(w, "Buchung fehlgeschlagen; Status wurde nicht geändert", http.StatusBadGateway)
+					return
+				}
 			}
 			st.WorkStopped = true
 			st.WorkStopTime = now
@@ -348,7 +354,10 @@ func (s *Server) handleAction(w http.ResponseWriter, r *http.Request) {
 	case "start_break":
 		if st.WorkStarted && !st.BreakStarted {
 			if s.exec != nil {
-				s.exec.StartBreak(r.Context())
+				if err := s.exec.StartBreak(r.Context()); err != nil {
+					http.Error(w, "Buchung fehlgeschlagen; Status wurde nicht geändert", http.StatusBadGateway)
+					return
+				}
 			}
 			st.BreakStarted = true
 			st.BreakStartTime = now
@@ -361,7 +370,10 @@ func (s *Server) handleAction(w http.ResponseWriter, r *http.Request) {
 	case "stop_break":
 		if st.BreakStarted && !st.BreakStopped {
 			if s.exec != nil {
-				s.exec.StopBreak(r.Context())
+				if err := s.exec.StopBreak(r.Context()); err != nil {
+					http.Error(w, "Buchung fehlgeschlagen; Status wurde nicht geändert", http.StatusBadGateway)
+					return
+				}
 			}
 			st.BreakStopped = true
 			st.BreakStopTime = now

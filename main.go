@@ -3,6 +3,7 @@ package main
 
 import (
 	"context"
+	"flag"
 	"log"
 	"os/signal"
 	"syscall"
@@ -17,6 +18,8 @@ import (
 )
 
 func main() {
+	checkAuth := flag.Bool("check-auth", false, "Check SSO login without booking time")
+	flag.Parse()
 	cfg, err := config.Load()
 	if err != nil {
 		log.Fatalf("[INIT] %v", err)
@@ -25,6 +28,13 @@ func main() {
 
 	notifier := notify.New(cfg.WebhookURL)
 	exec := executor.New(*cfg)
+	if *checkAuth {
+		if err := exec.CheckAuth(context.Background()); err != nil {
+			log.Fatal(err)
+		}
+		log.Println("SSO session verified; no time booked")
+		return
+	}
 	state := tracker.New(cfg.StateFile)
 	sched := scheduler.New(*cfg, state, exec, notifier)
 

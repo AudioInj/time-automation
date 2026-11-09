@@ -389,7 +389,10 @@ func (s *Scheduler) Run(ctx context.Context) {
 	}
 
 	if now.After(s.randomizedTimes["START_WORK"]) && !st.WorkStarted {
-		s.executor.StartWork(ctx)
+		if err := s.executor.StartWork(ctx); err != nil {
+			log.Printf("[SCHEDULER] StartWork failed: %v", err)
+			return
+		}
 		st.WorkStarted = true
 		st.WorkStartTime = time.Now()
 		s.state.Save(today, st)
@@ -402,7 +405,10 @@ func (s *Scheduler) Run(ctx context.Context) {
 	}
 
 	if st.WorkStarted && !st.BreakStarted && !st.BreakStopped && now.After(s.randomizedTimes["START_BREAK"]) {
-		s.executor.StartBreak(ctx)
+		if err := s.executor.StartBreak(ctx); err != nil {
+			log.Printf("[SCHEDULER] StartBreak failed: %v", err)
+			return
+		}
 		st.BreakStarted = true
 		st.BreakStartTime = time.Now()
 		s.state.Save(today, st)
@@ -419,7 +425,10 @@ func (s *Scheduler) Run(ctx context.Context) {
 		minBreakMet := time.Since(st.BreakStartTime) >= s.cfg.MinBreakDuration
 		afterPlannedStop := now.After(plannedStopBreak)
 		if minBreakMet && afterPlannedStop {
-			s.executor.StopBreak(ctx)
+			if err := s.executor.StopBreak(ctx); err != nil {
+				log.Printf("[SCHEDULER] StopBreak failed: %v", err)
+				return
+			}
 			st.BreakStopped = true
 			st.BreakStopTime = time.Now()
 			s.state.Save(today, st)
@@ -438,7 +447,10 @@ func (s *Scheduler) Run(ctx context.Context) {
 
 	if st.WorkStarted && !st.WorkStopped && now.After(s.randomizedTimes["STOP_WORK"]) {
 		if time.Since(st.WorkStartTime) >= s.cfg.MinWorkDuration {
-			s.executor.StopWork(ctx)
+			if err := s.executor.StopWork(ctx); err != nil {
+				log.Printf("[SCHEDULER] StopWork failed: %v", err)
+				return
+			}
 			st.WorkStopped = true
 			st.WorkStopTime = time.Now()
 			s.state.Save(today, st)
