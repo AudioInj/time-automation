@@ -22,7 +22,8 @@ permissions:
 jobs:
   test:
     name: Test
-    runs-on: ubuntu-latest
+    # Playwright 1.58.2 supports Ubuntu 24.04, not the moving ubuntu-latest image.
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
@@ -128,4 +129,3 @@ jobs:
         run: |
           gh pr merge --auto --squash ${{ github.event.pull_request.number }} \
             --repo ${{ github.repository }}
-
